@@ -144,7 +144,8 @@ const HotspotData = (() => {
     }
     return {
       area: data.area.trim(), bounds: data.bounds, source: data.source.trim(), method: data.method.trim(),
-      countUnit: countUnit?.trim() || "", validation, days
+      countUnit: countUnit?.trim() || "", validation, days,
+      handoff: buildHandoff(data.handoff, days, countUnit)
     };
   }
 
@@ -156,6 +157,46 @@ const HotspotData = (() => {
       if (days.length > 366) break;
     }
     return days;
+  }
+
+  function buildHandoff(windows, days, countUnit) {
+    if (windows === undefined) return {error: "The team export has no Sensor Handoff windows."};
+    if (!countUnit) return {error: "The Sensor Handoff needs the export’s countUnit."};
+    if (!Array.isArray(windows) || windows.length !== 3) {
+      return {error: "The Sensor Handoff needs three dated windows."};
+    }
+    const stages = [];
+    let season;
+    for (const window of windows) {
+      if (!window || !isDate(window.start) || !isDate(window.end)) {
+        return {error: "Each handoff window needs valid UTC start and end dates."};
+      }
+      const dates = listDates(window.start, window.end);
+      if (dates.length !== 7 || (stages.length && stages.at(-1).end >= window.start)) {
+        return {error: "Handoff windows must be seven days long and in chronological order."};
+      }
+      const key = dates.map(date => date.slice(5)).join(",");
+      if (season !== undefined && season !== key) {
+        return {error: "Handoff windows must cover the same seven calendar dates in different years."};
+      }
+      season = key;
+      const raw = [window.modis, window.viirs];
+      if (!raw.every(value => value === null || (Number.isSafeInteger(value) && value >= 0))) {
+        return {error: "Each handoff window needs MODIS and VIIRS totals or explicit nulls."};
+      }
+      const harmonized = dates.map(date => days.get(date)?.count);
+      if (harmonized.some(value => value == null)) {
+        return {error: "The week beginning " + window.start + " has missing harmonized counts."};
+      }
+      const total = harmonized.reduce((sum, value) => sum + value, 0);
+      if (!Number.isSafeInteger(total)) return {error: "A harmonized handoff total exceeds supported precision."};
+      stages.push({start: window.start, end: window.end, modis: raw[0], viirs: raw[1], total});
+    }
+    if (stages[0].modis === null || stages[0].viirs !== null || stages[1].modis === null ||
+        stages[1].viirs === null || stages[2].viirs === null) {
+      return {error: "Use an earlier MODIS-only window, a window with both sensors, and a later window with VIIRS."};
+    }
+    return {stages};
   }
 
   function seasonalComparison(days, end) {

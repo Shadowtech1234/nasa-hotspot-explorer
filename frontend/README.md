@@ -129,3 +129,34 @@ from your export, so use validated values and explain what they measure.
   ]
 }
 ```
+
+## Sensor Handoff
+
+Use **Play the Sensor Handoff** on the opening map. The sequence runs for
+about ten seconds and ends on a static comparison. It uses the dated
+satellite imagery as geographic context. The raw California example is
+available separately via **Try the demo**.
+
+To enable the handoff, include `countUnit` and this optional `handoff`
+array in the harmonized team export. These values illustrate the format.
+
+```json
+{
+  "countUnit": "Active grid-cell days",
+  "handoff": [
+    { "start": "2010-11-04", "end": "2010-11-10", "modis": 54, "viirs": null },
+    { "start": "2018-11-04", "end": "2018-11-10", "modis": 62, "viirs": 147 },
+    { "start": "2026-11-04", "end": "2026-11-10", "modis": null, "viirs": 132 }
+  ]
+}
+```
+
+Supply verified raw observation totals for the same area as the export.
+Use null when the source does not supply a sensor total and zero when it
+reports zero. The first week is MODIS only, the second includes both
+sensors, and the third includes VIIRS with or without MODIS. The three
+windows use the same seven UTC calendar dates in chronological order.
+All 21 dates need non-null harmonized daily counts in `days`. The viewer
+sums each week and shows the source, count unit, method and any validation
+already supplied by the team. A missing or incomplete handoff leaves
+the rest of the export usable and displays the missing requirement.

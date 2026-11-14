@@ -278,3 +278,44 @@ dialog { border-radius: 22px; box-shadow: var(--lift); }
   #print-report h1 { margin-bottom: .5em; font-size: 21pt; }
   #print-report p { margin: .48em 0; overflow-wrap: anywhere; }
 }
+
+.handoff-scene {
+  position: relative; isolation: isolate; display: grid; align-items: end; min-height: 355px;
+  overflow: hidden; border-radius: 17px; background: #172e36;
+}
+#handoff-map { position: absolute; inset: 0; z-index: 0; background: #172e36; }
+.handoff-frame {
+  position: relative; z-index: 1; width: min(34rem, calc(100% - 1.5rem)); margin: .75rem;
+  padding: clamp(.75rem, 2vw, 1.15rem); border: 1px solid #ffffff24; border-radius: 14px;
+  color: #f6faf7; background: rgb(15 32 30 / .94);
+}
+#handoff-date { color: #bfdbcc; font-size: .77rem; font-variant-numeric: tabular-nums; }
+#handoff-frame-title { margin: .24rem 0 .6rem; font-size: clamp(1.15rem, 3vw, 1.7rem); }
+#handoff-caption { margin-top: .6rem; font-size: .85rem; }
+.handoff-count { display: inline-grid; margin: 0 .65rem .2rem 0; gap: .1rem; color: #f6faf7; }
+.handoff-count span, .handoff-unit { font-size: .78rem; }
+.handoff-count strong { font-size: clamp(1rem, 3vw, 1.45rem); font-variant-numeric: tabular-nums; }
+.handoff-count.modis span { color: #ffc08b; }
+.handoff-count.viirs span { color: #a1e9f2; }
+.handoff-bar {
+  display: grid; grid-template-columns: 3rem minmax(0, 1fr) minmax(2rem, auto);
+  gap: .4rem; align-items: center; margin-top: .22rem; font-size: .8rem;
+}
+.handoff-bar strong { text-align: end; font-variant-numeric: tabular-nums; }
+.handoff-track { height: .42rem; background: #ffffff30; border-radius: 999px; overflow: hidden; }
+.handoff-track span { display: block; height: 100%; background: #a7e1bc; border-radius: inherit; }
+.handoff-timeline { display: flex; gap: .4rem; flex-wrap: wrap; margin: .65rem 0; }
+.handoff-timeline span {
+  padding: .3rem .65rem; border-radius: 999px; background: #eef3ed;
+  color: var(--muted); font-size: .75rem;
+}
+.handoff-timeline .is-current { background: #215743; color: #fff; }
+#handoff-status { margin: 0 0 .65rem; color: var(--muted); }
+#handoff-evidence { margin-top: .75rem; }
+#handoff-sources p { margin: .35rem 0; overflow-wrap: anywhere; }
+@media (max-width: 700px) {
+  .handoff-scene { min-height: 0; grid-template-rows: 195px auto; align-items: stretch; }
+  #handoff-map { position: relative; inset: auto; }
+  .handoff-frame { min-height: 185px; }
+  #launch-handoff { min-height: 44px; }
+}

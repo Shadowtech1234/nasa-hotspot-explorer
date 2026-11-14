@@ -11,6 +11,7 @@
   <script defer src="data.js"></script>
   <script defer src="app.js"></script>
   <script defer src="compare.js"></script>
+  <script defer src="handoff.js"></script>
 </head>
 <body>
   <a class="skip" href="#workspace">Skip to explorer</a>
@@ -44,6 +45,7 @@
         <div class="panel-heading map-heading">
           <div><h2 id="map-title">Hotspot map</h2><p id="map-scope"></p></div>
           <div class="map-tools">
+            <button id="launch-handoff" class="primary" type="button">Play the Sensor Handoff</button>
             <button id="launch-compare" type="button">Try the demo</button>
             <label class="basemap-label">Basemap <select id="basemap"><option value="satellite">Satellite</option><option value="simple">Simple</option></select></label>
             <button id="fit-area" type="button">Fit area</button>
@@ -63,6 +65,33 @@
         <div><h2>Was this week unusual?</h2><p>Compare the sensors, then put a week of burning activity in historical context.</p></div>
         <button id="compare-demo" class="primary" type="button">Try the demo</button>
       </div>
+      <section id="handoff" class="compare-card handoff" aria-labelledby="handoff-title">
+        <div class="compare-header">
+          <div><h3 id="handoff-title" tabindex="-1">The Sensor Handoff</h3><p>Three snapshots. Two instruments. One comparable measure.</p></div>
+          <button id="handoff-play" class="primary" type="button" disabled>Play sequence</button>
+        </div>
+        <p id="handoff-status" role="status"></p>
+        <div id="handoff-view" hidden>
+          <div class="handoff-scene">
+            <div id="handoff-map" aria-hidden="true"></div>
+            <div class="handoff-frame">
+              <p id="handoff-date"></p>
+              <h4 id="handoff-frame-title"></h4>
+              <div id="handoff-metrics"></div>
+              <p id="handoff-caption" aria-live="polite"></p>
+            </div>
+          </div>
+          <p id="handoff-map-note" class="compare-note"></p>
+          <div id="handoff-timeline" class="handoff-timeline" aria-label="Dated snapshots"></div>
+          <div class="actions handoff-controls">
+            <button id="handoff-pause" type="button">Pause</button>
+            <button id="handoff-skip" type="button">Skip to result</button>
+            <button id="handoff-replay" type="button" hidden>Replay</button>
+          </div>
+          <details id="handoff-evidence"><summary>See the evidence</summary><div id="handoff-sources"></div></details>
+        </div>
+        <button id="handoff-import" type="button" hidden>Open data imports</button>
+      </section>
       <section class="compare-card" aria-labelledby="sensor-title">
         <div class="compare-header">
           <div><h3 id="sensor-title">One area, two sensors</h3><p id="sensor-scope"></p></div>
