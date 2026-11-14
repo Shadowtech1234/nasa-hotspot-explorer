@@ -1,0 +1,80 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Explore and compare NASA FIRMS active fire detections by area, sensor, and date.">
+  <title>Hotspot Explorer | NASA Space Apps project</title>
+  <link rel="stylesheet" href="assets/leaflet.css">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="assets/leaflet.js"></script>
+  <script defer src="data.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <a class="skip" href="#workspace">Skip to explorer</a>
+  <header class="top">
+    <div class="identity"><span class="mark" aria-hidden="true">◉</span><div><strong>Hotspot Explorer</strong><span>NASA SPACE APPS PROJECT</span></div></div>
+    <a href="https://www.spaceappschallenge.org/2026/challenges/modis-and-viirs-hot-spots/">Challenge brief <span aria-hidden="true">↗</span></a>
+  </header>
+  <main id="workspace">
+    <section class="intro" aria-labelledby="title">
+      <div><h1 id="title">Burning activity explorer</h1><p>Compare MODIS and VIIRS satellite detections by area and day.</p></div>
+      <div class="actions">
+        <button id="restore" type="button">Restore snapshot</button>
+        <label class="upload">Open data <input id="upload" type="file" accept=".csv,.json,text/csv,application/json" multiple></label>
+      </div>
+    </section>
+    <section class="filters" aria-label="Explorer filters">
+      <div class="filter"><span class="caption">Dataset</span><select id="mode" aria-label="Dataset"><option value="raw">FIRMS raw detections</option><option value="harmonized" id="team-option" disabled>Harmonized activity</option></select></div>
+      <div class="filter" id="sensor-control"><span class="caption">Sensor</span><div class="segments" role="group" aria-label="Sensor">
+        <button type="button" data-sensor="both" aria-pressed="true">Both</button><button type="button" data-sensor="MODIS" aria-pressed="false">MODIS</button><button type="button" data-sensor="VIIRS" aria-pressed="false">VIIRS</button>
+      </div></div>
+      <div class="dates">
+        <label class="filter"><span class="caption">From (UTC)</span><input id="start" type="date"></label>
+        <label class="filter"><span class="caption">To (UTC)</span><input id="end" type="date"></label>
+      </div>
+      <div class="filter"><span class="caption">Area of interest</span><div class="area-controls"><button id="use-view" type="button">Use map view</button><button id="edit-area" type="button">Edit bounds</button></div><span id="area-name" class="subtle"></span></div>
+    </section>
+    <p id="status" class="status" role="status">Loading FIRMS snapshots…</p>
+    <div class="panels">
+      <section class="panel map-panel" aria-labelledby="map-title">
+        <div class="panel-heading"><div><h2 id="map-title">Hotspot map</h2><p id="map-scope"></p></div><button id="fit-area" type="button">Fit area</button></div>
+        <div id="map" role="region" aria-label="Interactive hotspot map"></div>
+        <div class="map-footer"><div id="legend" class="legend"></div><span>Locations are satellite pixel centers.</span></div>
+      </section>
+      <section class="panel calendar-panel" aria-labelledby="calendar-title">
+        <div class="panel-heading"><div><h2 id="calendar-title">Burning activity calendar</h2><p id="calendar-summary"></p></div><button id="clear-day" type="button" hidden>Clear day</button></div>
+        <p class="calendar-help">Select a day to inspect detections on the map.</p>
+        <div id="calendar" class="calendar"></div>
+      </section>
+    </div>
+    <section class="panel detail-panel" aria-labelledby="detail-title">
+      <div class="panel-heading"><div><h2 id="detail-title">Detections</h2><p id="list-summary"></p></div></div>
+      <div id="details"></div>
+      <div class="pagination"><button id="previous" type="button">Previous</button><span id="page"></span><button id="next" type="button">Next</button></div>
+    </section>
+    <details class="sources">
+      <summary>Sources and interpretation</summary>
+      <p id="provenance"></p>
+      <p>Raw counts are satellite observations of thermal anomalies. Repeated observations may refer to the same fire. MODIS and VIIRS have different resolutions and overpass times. Clouds, smoke, and gaps between overpasses can hide activity.</p>
+      <p>“No records” means the loaded file has records for that sensor and day, but none match this area. “Unknown” means the available data cannot establish an observation count. Neither label establishes fire absence.</p>
+      <p><a href="https://firms.modaps.eosdis.nasa.gov/download/">NASA FIRMS archive</a> · <a href="https://forum.earthdata.nasa.gov/viewtopic.php?t=5178">NASA detection guidance</a> · <a href="https://www.naturalearthdata.com/">Natural Earth basemap</a></p>
+    </details>
+  </main>
+  <dialog id="bounds-dialog" aria-labelledby="bounds-title">
+    <form id="bounds-form">
+      <h2 id="bounds-title">Edit area bounds</h2>
+      <p>Enter decimal coordinates. Use a negative value for west or south.</p>
+      <div class="bounds-fields">
+        <label>West <input name="west" type="number" min="-180" max="180" step="any" required></label>
+        <label>South <input name="south" type="number" min="-85" max="85" step="any" required></label>
+        <label>East <input name="east" type="number" min="-180" max="180" step="any" required></label>
+        <label>North <input name="north" type="number" min="-85" max="85" step="any" required></label>
+      </div>
+      <p id="bounds-error" role="alert"></p>
+      <div class="actions"><button type="button" id="cancel-bounds">Cancel</button><button type="submit" class="primary">Apply area</button></div>
+    </form>
+  </dialog>
+</body>
+</html>
