@@ -134,7 +134,18 @@ const HotspotData = (() => {
       const points = positions.map(({lat, lon}) => ({lat, lon, date: day.date, sensor: "Harmonized"}));
       days.set(day.date, {count: day.count, points});
     }
-    return {area: data.area.trim(), bounds: data.bounds, source: data.source.trim(), method: data.method.trim(), days};
+    const countUnit = data.countUnit;
+    const validation = data.validation ?? [];
+    const hasText = value => typeof value === "string" && Boolean(value.trim());
+    if ((countUnit !== undefined && !hasText(countUnit)) || !Array.isArray(validation) ||
+        !validation.every(item => item && ["metric", "value", "period", "interpretation"]
+          .every(key => hasText(item[key])))) {
+      throw new Error("Optional metadata needs a count unit and validation entries with metric, value, period, and interpretation.");
+    }
+    return {
+      area: data.area.trim(), bounds: data.bounds, source: data.source.trim(), method: data.method.trim(),
+      countUnit: countUnit?.trim() || "", validation, days
+    };
   }
 
   function listDates(start, end) {
@@ -147,6 +158,41 @@ const HotspotData = (() => {
     return days;
   }
 
+  function seasonalComparison(days, end) {
+    if (!isDate(end)) return {error: "Choose a valid week ending date."};
+    const first = new Date(end);
+    first.setUTCDate(first.getUTCDate() - 6);
+    const dates = listDates(first.toISOString().slice(0, 10), end);
+    if (dates.length !== 7) return {error: "Choose a week with seven valid UTC dates."};
+    const observations = dates.map(date => ({date, count: days.get(date)?.count ?? null}));
+    const missing = observations.filter(day => day.count === null).length;
+    if (missing) return {error: "The selected week has " + missing + " unknown " +
+      (missing === 1 ? "day" : "days") + ". Choose a week with seven reported counts."};
+
+    const endYear = Number(end.slice(0, 4));
+    const years = [...new Set(Array.from(days.keys(), date => Number(date.slice(0, 4))))]
+      .filter(year => year < endYear).sort((a, b) => a - b);
+    const total = observations.reduce((sum, day) => sum + day.count, 0);
+    const prior = [];
+    for (const year of years) {
+      const comparable = dates.map(date =>
+        String(Number(date.slice(0, 4)) + year - endYear).padStart(4, "0") + date.slice(4));
+      if (!comparable.every(isDate) || listDates(comparable[0], comparable.at(-1)).length !== 7) continue;
+      const counts = comparable.map(date => days.get(date)?.count);
+      if (counts.some(count => count == null)) continue;
+      prior.push({year, start: comparable[0], end: comparable.at(-1),
+        total: counts.reduce((sum, count) => sum + count, 0)});
+    }
+    if (prior.length < 3) return {error: "Found " + prior.length +
+      " complete prior " + (prior.length === 1 ? "week" : "weeks") +
+      ". Three are needed for a historical comparison."};
+    const sorted = prior.map(item => item.total).sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    const median = sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+    return {observations, start: dates[0], end, total, prior, median,
+      min: sorted[0], max: sorted.at(-1)};
+  }
+
   function indexRaw(points) {
     const days = new Map();
     for (const point of points) {
@@ -156,5 +202,5 @@ const HotspotData = (() => {
     return days;
   }
 
-  return {sensors, urls, extent, validBounds, contains, parseFirms, parseTeam, listDates, indexRaw};
+  return {sensors, urls, extent, validBounds, contains, parseFirms, parseTeam, listDates, seasonalComparison, indexRaw};
 })();

@@ -10,6 +10,7 @@
   <script defer src="assets/leaflet.js"></script>
   <script defer src="data.js"></script>
   <script defer src="app.js"></script>
+  <script defer src="compare.js"></script>
 </head>
 <body>
   <a class="skip" href="#workspace">Skip to explorer</a>
@@ -22,10 +23,11 @@
       <h1>Burning activity explorer</h1>
       <div class="tabs" role="tablist" aria-label="Explorer views">
         <button id="map-tab" type="button" role="tab" aria-controls="map-panel" aria-selected="true">Map &amp; Calendar</button>
+        <button id="compare-tab" type="button" role="tab" aria-controls="compare-panel" aria-selected="false" tabindex="-1">Compare</button>
         <button id="detections-tab" type="button" role="tab" aria-controls="detections-panel" aria-selected="false" tabindex="-1">Detections</button>
       </div>
     </div>
-    <section class="filters" aria-label="Explorer filters">
+    <section id="explorer-filters" class="filters" aria-label="Explorer filters">
       <div class="filter"><span class="caption">Dataset</span><select id="mode" aria-label="Dataset"><option value="raw">FIRMS raw detections</option><option value="harmonized" id="team-option" disabled>Harmonized activity</option></select></div>
       <div class="filter" id="sensor-control"><span class="caption">Sensor</span><div class="segments" role="group" aria-label="Sensor">
         <button type="button" data-sensor="both" aria-pressed="true">Both</button><button type="button" data-sensor="MODIS" aria-pressed="false">MODIS</button><button type="button" data-sensor="VIIRS" aria-pressed="false">VIIRS</button>
@@ -42,6 +44,7 @@
         <div class="panel-heading map-heading">
           <div><h2 id="map-title">Hotspot map</h2><p id="map-scope"></p></div>
           <div class="map-tools">
+            <button id="launch-compare" type="button">Try the demo</button>
             <label class="basemap-label">Basemap <select id="basemap"><option value="satellite">Satellite</option><option value="simple">Simple</option></select></label>
             <button id="fit-area" type="button">Fit area</button>
             <button id="resize-map" type="button" aria-pressed="false">Larger map</button>
@@ -55,6 +58,50 @@
         <div id="calendar" class="calendar"></div>
       </section>
     </section>
+    <section id="compare-panel" role="tabpanel" aria-labelledby="compare-tab" hidden>
+      <div class="compare-intro">
+        <div><h2>Was this week unusual?</h2><p>Compare the sensors, then put a week of burning activity in historical context.</p></div>
+        <button id="compare-demo" class="primary" type="button">Try the demo</button>
+      </div>
+      <section class="compare-card" aria-labelledby="sensor-title">
+        <div class="compare-header">
+          <div><h3 id="sensor-title">One area, two sensors</h3><p id="sensor-scope"></p></div>
+          <div class="actions"><label class="filter">Observation date (UTC)<input id="compare-date" type="date"></label>
+            <button id="compare-fit" type="button">Fit study area</button></div>
+        </div>
+        <div id="compare-mobile" class="segments" role="group" aria-label="Sensor shown on map">
+          <button type="button" data-compare-view="MODIS" aria-pressed="true">MODIS</button>
+          <button type="button" data-compare-view="VIIRS" aria-pressed="false">VIIRS</button>
+        </div>
+        <div class="sensor-metrics" aria-label="Sensor observations">
+          <div class="sensor-metric modis"><span>MODIS · about 1 km</span><strong id="compare-modis"></strong></div>
+          <div class="sensor-metric viirs"><span>VIIRS · about 375 m</span><strong id="compare-viirs"></strong></div>
+        </div>
+        <div id="compare-maps" class="compare-maps" data-active="MODIS">
+          <div id="compare-map-modis" class="compare-map" role="region" aria-label="MODIS comparison map" tabindex="0"></div>
+          <div id="compare-map-viirs" class="compare-map" role="region" aria-label="VIIRS comparison map" tabindex="0"></div>
+        </div>
+        <p class="compare-note" id="compare-visual-note"></p>
+        <p class="compare-note">Resolution, overpass timing, and detection methods differ. Both counts describe observations, which can include repeat views of the same fire.</p>
+      </section>
+      <section class="compare-card" aria-labelledby="season-title">
+        <div class="compare-header">
+          <div><h3 id="season-title">This week in context</h3><p id="season-scope"></p></div>
+          <div class="actions"><label class="filter">Week ending (UTC)<input id="season-end" type="date"></label>
+            <button id="open-team-import" type="button">Open data imports</button></div>
+        </div>
+        <p id="season-status" role="status"></p>
+        <div id="season-report" hidden>
+          <div id="season-metrics" class="season-metrics"></div>
+          <div id="season-chart" class="season-chart" aria-hidden="true"></div>
+          <details id="season-table"><summary>Comparison values</summary><div id="season-values"></div></details>
+          <div class="compare-days" id="season-days" aria-label="Inspect days on the map"></div>
+          <div class="actions"><button id="print-briefing" type="button">Print briefing</button>
+            <button id="download-comparison" type="button">Download comparison CSV</button></div>
+        </div>
+        <details class="compare-evidence"><summary>Evidence and coverage</summary><div id="season-evidence"></div></details>
+      </section>
+    </section>
     <section id="detections-panel" role="tabpanel" aria-labelledby="detections-tab" hidden>
       <section class="data-controls" aria-labelledby="data-title">
         <div><h2 id="data-title">Data source</h2><p id="provenance"></p></div>
@@ -64,18 +111,21 @@
         </div>
       </section>
       <section class="detail-panel" aria-labelledby="detail-title">
-        <div class="panel-heading"><div><h2 id="detail-title">Detections</h2><p id="list-summary"></p></div></div>
+        <div class="panel-heading"><div><h2 id="detail-title">Detections</h2><p id="list-summary"></p></div><button id="download-csv" type="button" disabled>Download filtered CSV</button></div>
         <div id="details"></div>
         <div class="pagination"><button id="previous" type="button">Previous</button><span id="page"></span><button id="next" type="button">Next</button></div>
       </section>
       <details class="sources">
-      <summary>Sources and interpretation</summary>
+      <summary>Data &amp; methods</summary>
+      <p id="method"></p>
+      <p id="coverage"></p>
       <p>Raw counts are satellite observations of thermal anomalies. Repeated observations may refer to the same fire. MODIS and VIIRS have different resolutions and overpass times. Clouds, smoke, and gaps between overpasses can hide activity.</p>
       <p>“No records” means the loaded file has records for that sensor and day, but none match this area. “Unknown” means the available data cannot establish an observation count. Neither label establishes fire absence.</p>
       <p><a href="https://firms.modaps.eosdis.nasa.gov/download/">NASA FIRMS archive</a> · <a href="https://forum.earthdata.nasa.gov/viewtopic.php?t=5178">NASA detection guidance</a> · <a href="https://www.naturalearthdata.com/">Natural Earth basemap</a></p>
     </details>
     </section>
   </main>
+  <section id="print-report" hidden aria-label="Seasonal comparison briefing"></section>
   <dialog id="bounds-dialog" aria-labelledby="bounds-title">
     <form id="bounds-form">
       <h2 id="bounds-title">Edit area bounds</h2>

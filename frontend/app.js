@@ -14,56 +14,99 @@ const state = {
 let revision = 0;
 let basemapError = false;
 let visible = [];
+let reportDays = [];
 let moveTimer;
 let fitOnShow = false;
 let switching = false;
 
+const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const map = L.map("map", {
+  fadeAnimation: !reducedMotion, zoomAnimation: !reducedMotion, markerZoomAnimation: !reducedMotion,
   minZoom: 2, maxZoom: 15, maxBounds: [[-85, -180], [85, 180]], maxBoundsViscosity: 1,
   scrollWheelZoom: false, preferCanvas: true
 });
 map.attributionControl.setPrefix(false);
 map.createPane("basemap").style.zIndex = "220";
+map.createPane("global-imagery").style.zIndex = "225";
 map.createPane("imagery").style.zIndex = "230";
-L.control.scale({imperial: false}).addTo(map);
+L.control.scale({imperial: false, maxWidth: 88}).addTo(map);
 const boundary = L.rectangle(asLeafletBounds(region), {
   color: "#a3c2d5", opacity: 0.8, weight: 1, dashArray: "5 5", fill: false, interactive: false
 }).addTo(map);
 const pointLayer = L.layerGroup().addTo(map);
 const focusLayer = L.layerGroup().addTo(map);
 map.fitBounds(asLeafletBounds(region), {padding: [22, 22]});
-const satellite = L.tileLayer(
-  "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_NextGeneration/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg",
-  {pane: "imagery", maxNativeZoom: 8, noWrap: true, attribution: "NASA EOSDIS GIBS · Blue Marble"}
+const scene = {
+  date: "Nov 10, 2026 UTC",
+  projectedBounds: [-14248894, 2632019, -7124447, 6621294],
+  image: "assets/viirs-noaa20-2026-11-10.jpg"
+};
+const [west, south, east, north] = scene.projectedBounds;
+const projection = L.CRS.EPSG3857.projection;
+const sceneBounds = L.latLngBounds(
+  projection.unproject(L.point(west, south)),
+  projection.unproject(L.point(east, north))
 );
-let imageryTimer;
-let imageryFailed = false;
-satellite.on("loading", () => {
-  clearTimeout(imageryTimer);
-  imageryTimer = setTimeout(() => setBasemap("simple", true), 8000);
+const satellite = L.imageOverlay(scene.image, sceneBounds, {
+  pane: "imagery", attribution: "NASA EOSDIS GIBS",
+  alt: "True-color NOAA-20 VIIRS image of the contiguous United States on November 10, 2026"
 });
-satellite.on("load", () => clearTimeout(imageryTimer));
-satellite.on("tileerror", () => {
-  if (map.hasLayer(satellite)) setBasemap("simple", true);
-});
+const globalImageUrl = "assets/viirs-world-2026-11-10.jpg";
+const globalImagery = L.imageOverlay(globalImageUrl,
+  [[-85.05112878, -180], [85.05112878, 180]], {
+    pane: "global-imagery", attribution: "NASA EOSDIS GIBS",
+    alt: "Global satellite mosaic with November 10, 2026 VIIRS imagery"
+  });
+const imageryLayers = [globalImagery, satellite];
+const imageryStatus = new Map();
+for (const layer of imageryLayers) {
+  imageryStatus.set(layer, "loading");
+  layer.on("load", () => {
+    imageryStatus.set(layer, "ready");
+    mapHelp();
+  });
+  layer.on("error", () => {
+    imageryStatus.set(layer, "failed");
+    layer.remove();
+    mapHelp();
+  });
+}
 
-function setBasemap(choice, failed = false) {
-  clearTimeout(imageryTimer);
-  imageryFailed = failed;
+function setBasemap(choice) {
   $("basemap").value = choice;
-  if (choice === "satellite") satellite.addTo(map);
-  else satellite.remove();
+  for (const layer of imageryLayers) {
+    if (choice === "simple") layer.remove();
+    else {
+      if (imageryStatus.get(layer) === "failed") {
+        imageryStatus.set(layer, "loading");
+        layer.setUrl(layer === satellite ? scene.image : globalImageUrl);
+      }
+      layer.addTo(map);
+    }
+  }
   mapHelp();
 }
 
 function mapHelp() {
-  const message = imageryFailed ? "Satellite imagery unavailable. " :
-    basemapError && !map.hasLayer(satellite) ? "Simple basemap unavailable. " : "";
+  let imagery = "";
+  if ($("basemap").value === "satellite") {
+    if (imageryStatus.get(globalImagery) === "ready") {
+      imagery = "VIIRS · " + scene.date + " · Blue Marble fills gaps";
+    } else if (imageryStatus.get(satellite) === "ready" && map.getBounds().overlaps(sceneBounds)) {
+      imagery = "VIIRS · " + scene.date + " · U.S. detail";
+    } else if (imageryLayers.some(layer => imageryStatus.get(layer) === "loading")) {
+      imagery = "Loading satellite imagery…";
+    } else {
+      imagery = "Satellite imagery unavailable here · Simple basemap";
+    }
+  } else if (basemapError) {
+    imagery = "Simple basemap unavailable";
+  }
   const action = map.scrollWheelZoom.enabled()
     ? "Scroll to zoom. Esc releases scrolling."
-    : "Click or focus the map to scroll to zoom.";
-  $("map-help").textContent = message + action +
-    (map.hasLayer(satellite) ? " Blue Marble is background imagery." : "");
+    : matchMedia("(pointer: coarse)").matches ? "Drag to pan. Pinch to zoom."
+      : "Click or focus the map to scroll to zoom.";
+  $("map-help").textContent = [imagery, action].filter(Boolean).join(" · ");
 }
 
 function asLeafletBounds(bounds) {
@@ -125,33 +168,39 @@ fetchLocal("assets/countries.geojson").then(response => response.json()).then(ge
   render();
 });
 
+async function loadSnapshot() {
+  state.snapshot ??= Promise.allSettled(data.sensors.map(async sensor => {
+    const response = await fetchLocal("assets/" + sensor.toLowerCase() + ".csv");
+    return data.parseFirms(await response.text(), sensor);
+  }));
+  const pending = state.snapshot;
+  const results = await pending;
+  const points = [];
+  const available = [];
+  let skipped = 0;
+  for (const [index, result] of results.entries()) {
+    if (result.status !== "fulfilled") continue;
+    for (const point of result.value.points) points.push(point);
+    available.push(data.sensors[index]);
+    skipped += result.value.skipped;
+  }
+  if (available.length < data.sensors.length && state.snapshot === pending) state.snapshot = null;
+  if (!available.length) {
+    throw new Error("The bundled snapshots could not load. Open a FIRMS CSV to explore detections.");
+  }
+  return {raw: data.indexRaw(points), available, skipped,
+    source: "NASA FIRMS · " + available.join(" + ") +
+      " · U.S. and Hawaii NRT snapshot downloaded Nov 14, 2026 (UTC)"};
+}
+
 async function restoreSnapshot() {
   const attempt = ++revision;
   status("Loading FIRMS snapshots…");
   try {
-    state.snapshot ??= Promise.allSettled(data.sensors.map(async sensor => {
-      const response = await fetchLocal("assets/" + sensor.toLowerCase() + ".csv");
-      return data.parseFirms(await response.text(), sensor);
-    }));
-    const results = await state.snapshot;
+    const {raw, source, available, skipped} = await loadSnapshot();
     if (attempt !== revision) return;
-    const points = [];
-    const available = [];
-    let skipped = 0;
-    for (const [index, result] of results.entries()) {
-      if (result.status !== "fulfilled") continue;
-      for (const point of result.value.points) points.push(point);
-      available.push(data.sensors[index]);
-      skipped += result.value.skipped;
-    }
-    if (!available.length) {
-      state.snapshot = null;
-      throw new Error("The bundled snapshots could not load. Open a FIRMS CSV to explore detections.");
-    }
-    if (available.length < data.sensors.length) state.snapshot = null;
-    state.raw = data.indexRaw(points);
-    state.rawSource = "NASA FIRMS · " + available.join(" + ") +
-      " · U.S. and Hawaii NRT snapshot downloaded Nov 14, 2026 (UTC)";
+    state.raw = raw;
+    state.rawSource = source;
     state.sensor = "both";
     state.bounds = region;
     state.home = region;
@@ -260,6 +309,7 @@ function teamDay(date) {
 function calendarCell({date, counts}) {
   const cell = element("button", "", "day");
   cell.type = "button";
+  cell.classList.toggle("has-activity", counts.some(({count}) => count > 0));
   cell.dataset.date = date;
   cell.setAttribute("aria-pressed", String(date === state.selected));
   const description = counts.map(({sensor, count}) =>
@@ -390,6 +440,7 @@ function render() {
   const valid = dates.length > 0 && dates.length <= 366;
   const raw = state.mode === "raw";
   const days = valid ? dates.map(raw ? rawDay : teamDay) : [];
+  reportDays = days;
   if (!days.some(day => day.date === state.selected)) state.selected = "";
   visible = days.filter(day => !state.selected || day.date === state.selected).flatMap(day => day.points);
   state.page = Math.min(state.page, Math.max(0, Math.ceil(visible.length / pageSize) - 1));
@@ -423,13 +474,55 @@ function render() {
   const records = Array.from((raw ? state.raw : state.team.days).keys()).sort();
   const datesText = records.length ? " · Record dates (UTC) " + records[0] + " to " + records.at(-1) : "";
   $("provenance").textContent = (sourceLabel() || "No dataset loaded") + datesText;
+  $("method").textContent = raw
+    ? "Method: count FIRMS observation rows in the selected area and UTC dates, separately for each instrument."
+    : "Method: " + state.team.method + ". The calendar uses the daily totals supplied by the team export.";
+  $("coverage").textContent = (raw ? "Current study bounds" : "Coverage fixed by team export") +
+    " (west, south, east, north): " + bounds + ". " +
+    (raw ? "Counts reflect only the loaded files." : "Missing dates and null counts are unknown. Map points may be a subset.");
+  $("download-csv").disabled = raw ? !visible.length : !reportDays.length;
+  $("download-csv").textContent = raw ? "Download filtered CSV" : "Download daily counts CSV";
   for (const button of document.querySelectorAll("[data-sensor]")) {
     button.setAttribute("aria-pressed", String(state.sensor === button.dataset.sensor));
   }
   renderCalendar(days);
   if (state.tab === "map") renderMap(visible);
   renderDetails();
+  if (state.tab === "compare") window.dispatchEvent(new Event("hotspot:compare"));
 }
+
+function csvCell(value) {
+  if (value == null) return "";
+  let text = String(value);
+  // Imported fields can contain spreadsheet formulas. Keep those fields literal.
+  if (typeof value === "string" && /^[\s]*[=+\-@]|^[\t\r\n]/.test(text)) text = "'" + text;
+  return /[",\r\n]/.test(text) ? '"' + text.replaceAll('"', '""') + '"' : text;
+}
+
+function exportCsv() {
+  const raw = state.mode === "raw";
+  const rows = raw
+    ? [["date_utc", "time_utc", "sensor", "satellite", "latitude", "longitude", "confidence", "frp_mw"],
+      ...visible.map(point => [point.date, point.time, point.sensor, point.satellite, point.lat, point.lon,
+        point.confidence, point.frp])]
+    : [["date_utc", "harmonized_count", "coverage_status", "area"],
+      ...reportDays.map(({date, counts}) => {
+        const [{count}] = counts;
+        return [date, count, count === null ? "unknown" : "reported", state.team.area];
+      })];
+  return rows.map(row => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
+}
+
+$("download-csv").addEventListener("click", () => {
+  const url = URL.createObjectURL(new Blob([exportCsv()], {type: "text/csv;charset=utf-8"}));
+  const link = element("a");
+  link.href = url;
+  link.download = state.mode === "raw" ? "firms-filtered-detections.csv" : "harmonized-daily-counts.csv";
+  document.body.append(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
 
 function applyArea(bounds, name, fit) {
   state.follow = false;
@@ -509,7 +602,7 @@ $("clear-day").addEventListener("click", () => {
 $("previous").addEventListener("click", () => { state.page--; renderDetails(); });
 $("next").addEventListener("click", () => { state.page++; renderDetails(); });
 
-const tabs = ["map", "detections"];
+const tabs = ["map", "compare", "detections"];
 
 function showTab(tab, focusTab = false) {
   if (tab !== state.tab) {
@@ -520,6 +613,7 @@ function showTab(tab, focusTab = false) {
       $(id + "-tab").tabIndex = active ? 0 : -1;
       $(id + "-panel").hidden = !active;
     }
+    $("explorer-filters").hidden = tab === "compare";
     if (tab === "map") {
       switching = true;
       map.invalidateSize({pan: true});
@@ -533,6 +627,7 @@ function showTab(tab, focusTab = false) {
       setWheel(false);
     }
   }
+  if (tab === "compare") window.dispatchEvent(new Event("hotspot:compare"));
   if (focusTab) $(tab + "-tab").focus();
 }
 
@@ -569,7 +664,8 @@ for (const [index, tab] of tabs.entries()) {
   const button = $(tab + "-tab");
   button.addEventListener("click", () => showTab(tab));
   button.addEventListener("keydown", event => {
-    const target = {ArrowLeft: 1 - index, ArrowRight: 1 - index, Home: 0, End: 1};
+    const target = {ArrowLeft: (index + tabs.length - 1) % tabs.length,
+      ArrowRight: (index + 1) % tabs.length, Home: 0, End: tabs.length - 1};
     if (!Object.hasOwn(target, event.key)) return;
     event.preventDefault();
     showTab(tabs[target[event.key]], true);
@@ -594,6 +690,7 @@ $("map").addEventListener("keydown", event => {
   if (event.key === "Escape") setWheel(false);
 });
 map.on("moveend", () => {
+  mapHelp();
   clearTimeout(moveTimer);
   moveTimer = setTimeout(syncView, 90);
 });
