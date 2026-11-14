@@ -14,17 +14,17 @@
 <body>
   <a class="skip" href="#workspace">Skip to explorer</a>
   <header class="top">
-    <div class="identity"><span class="mark" aria-hidden="true">◉</span><div><strong>Hotspot Explorer</strong><span>NASA SPACE APPS PROJECT</span></div></div>
-    <a href="https://www.spaceappschallenge.org/2026/challenges/modis-and-viirs-hot-spots/">Challenge brief <span aria-hidden="true">↗</span></a>
+    <a class="identity" href="#workspace"><span class="mark" aria-hidden="true"></span><span>Hotspot Explorer</span></a>
+    <a class="challenge" href="https://www.spaceappschallenge.org/2026/challenges/modis-and-viirs-hot-spots/">NASA Space Apps <span aria-hidden="true">↗</span></a>
   </header>
   <main id="workspace">
-    <section class="intro" aria-labelledby="title">
-      <div><h1 id="title">Burning activity explorer</h1><p>Compare MODIS and VIIRS satellite detections by area and day.</p></div>
-      <div class="actions">
-        <button id="restore" type="button">Restore snapshot</button>
-        <label class="upload">Open data <input id="upload" type="file" accept=".csv,.json,text/csv,application/json" multiple></label>
+    <div class="intro">
+      <h1>Burning activity explorer</h1>
+      <div class="tabs" role="tablist" aria-label="Explorer views">
+        <button id="map-tab" type="button" role="tab" aria-controls="map-panel" aria-selected="true">Map &amp; Calendar</button>
+        <button id="detections-tab" type="button" role="tab" aria-controls="detections-panel" aria-selected="false" tabindex="-1">Detections</button>
       </div>
-    </section>
+    </div>
     <section class="filters" aria-label="Explorer filters">
       <div class="filter"><span class="caption">Dataset</span><select id="mode" aria-label="Dataset"><option value="raw">FIRMS raw detections</option><option value="harmonized" id="team-option" disabled>Harmonized activity</option></select></div>
       <div class="filter" id="sensor-control"><span class="caption">Sensor</span><div class="segments" role="group" aria-label="Sensor">
@@ -34,33 +34,47 @@
         <label class="filter"><span class="caption">From (UTC)</span><input id="start" type="date"></label>
         <label class="filter"><span class="caption">To (UTC)</span><input id="end" type="date"></label>
       </div>
-      <div class="filter"><span class="caption">Area of interest</span><div class="area-controls"><button id="use-view" type="button">Use map view</button><button id="edit-area" type="button">Edit bounds</button></div><span id="area-name" class="subtle"></span></div>
+      <div class="filter"><span class="caption">Study area</span><div class="area-controls"><button id="use-view" type="button">Lock area</button><button id="edit-area" type="button">Edit bounds</button></div><span id="area-name" class="subtle"></span></div>
     </section>
     <p id="status" class="status" role="status">Loading FIRMS snapshots…</p>
-    <div class="panels">
-      <section class="panel map-panel" aria-labelledby="map-title">
-        <div class="panel-heading"><div><h2 id="map-title">Hotspot map</h2><p id="map-scope"></p></div><button id="fit-area" type="button">Fit area</button></div>
-        <div id="map" role="region" aria-label="Interactive hotspot map"></div>
-        <div class="map-footer"><div id="legend" class="legend"></div><span>Locations are satellite pixel centers.</span></div>
+    <section id="map-panel" role="tabpanel" aria-labelledby="map-tab">
+      <section class="map-panel" aria-labelledby="map-title">
+        <div class="panel-heading map-heading">
+          <div><h2 id="map-title">Hotspot map</h2><p id="map-scope"></p></div>
+          <div class="map-tools">
+            <label class="basemap-label">Basemap <select id="basemap"><option value="satellite">Satellite</option><option value="simple">Simple</option></select></label>
+            <button id="fit-area" type="button">Fit area</button>
+            <button id="resize-map" type="button" aria-pressed="false">Larger map</button>
+          </div>
+        </div>
+        <div id="map" role="region" aria-label="Interactive hotspot map" aria-describedby="map-help" tabindex="0"></div>
+        <div class="map-footer"><div id="legend" class="legend"></div><p id="map-help" class="map-help"></p></div>
       </section>
-      <section class="panel calendar-panel" aria-labelledby="calendar-title">
+      <section class="calendar-panel" aria-labelledby="calendar-title">
         <div class="panel-heading"><div><h2 id="calendar-title">Burning activity calendar</h2><p id="calendar-summary"></p></div><button id="clear-day" type="button" hidden>Clear day</button></div>
-        <p class="calendar-help">Select a day to inspect detections on the map.</p>
         <div id="calendar" class="calendar"></div>
       </section>
-    </div>
-    <section class="panel detail-panel" aria-labelledby="detail-title">
-      <div class="panel-heading"><div><h2 id="detail-title">Detections</h2><p id="list-summary"></p></div></div>
-      <div id="details"></div>
-      <div class="pagination"><button id="previous" type="button">Previous</button><span id="page"></span><button id="next" type="button">Next</button></div>
     </section>
-    <details class="sources">
+    <section id="detections-panel" role="tabpanel" aria-labelledby="detections-tab" hidden>
+      <section class="data-controls" aria-labelledby="data-title">
+        <div><h2 id="data-title">Data source</h2><p id="provenance"></p></div>
+        <div class="actions">
+          <button id="restore" type="button">Restore snapshot</button>
+          <label class="upload">Open CSV / JSON <input id="upload" type="file" aria-label="Open FIRMS CSV or team JSON files" accept=".csv,.json,text/csv,application/json" multiple></label>
+        </div>
+      </section>
+      <section class="detail-panel" aria-labelledby="detail-title">
+        <div class="panel-heading"><div><h2 id="detail-title">Detections</h2><p id="list-summary"></p></div></div>
+        <div id="details"></div>
+        <div class="pagination"><button id="previous" type="button">Previous</button><span id="page"></span><button id="next" type="button">Next</button></div>
+      </section>
+      <details class="sources">
       <summary>Sources and interpretation</summary>
-      <p id="provenance"></p>
       <p>Raw counts are satellite observations of thermal anomalies. Repeated observations may refer to the same fire. MODIS and VIIRS have different resolutions and overpass times. Clouds, smoke, and gaps between overpasses can hide activity.</p>
       <p>“No records” means the loaded file has records for that sensor and day, but none match this area. “Unknown” means the available data cannot establish an observation count. Neither label establishes fire absence.</p>
       <p><a href="https://firms.modaps.eosdis.nasa.gov/download/">NASA FIRMS archive</a> · <a href="https://forum.earthdata.nasa.gov/viewtopic.php?t=5178">NASA detection guidance</a> · <a href="https://www.naturalearthdata.com/">Natural Earth basemap</a></p>
     </details>
+    </section>
   </main>
   <dialog id="bounds-dialog" aria-labelledby="bounds-title">
     <form id="bounds-form">

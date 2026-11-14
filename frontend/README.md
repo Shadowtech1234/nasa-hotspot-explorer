@@ -58,3 +58,12 @@ Importing JSON preserves the currently loaded raw dataset.
 
 Map geometry comes from [Natural Earth](https://www.naturalearthdata.com/about/terms-of-use/).
 Leaflet 1.9.4 is bundled with its license in the assets folder.
+
+## Explorer tabs
+
+Use Map & Calendar to inspect an area. Follow map updates raw sensor counts
+after you move or resize the map. Lock area or Edit bounds keeps the study
+area fixed. The Detections tab contains the matching rows and import controls.
+Focus or click the map to enable wheel zoom, and press Escape to release it.
+The Satellite basemap uses NASA GIBS Blue Marble regional imagery. The Simple
+basemap is bundled and is used automatically if imagery cannot load.

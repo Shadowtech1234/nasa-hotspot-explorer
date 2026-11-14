@@ -9,25 +9,62 @@ const monthName = new Intl.DateTimeFormat("en-US", {month: "long", year: "numeri
 const pageSize = 20;
 const state = {
   raw: new Map(), team: null, mode: "raw", sensor: "both", bounds: region, area: "Contiguous U.S. view",
-  rawSource: "", selected: "", page: 0, snapshot: null
+  rawSource: "", selected: "", page: 0, snapshot: null, follow: true, tab: "map", home: region
 };
 let revision = 0;
 let basemapError = false;
 let visible = [];
+let moveTimer;
+let fitOnShow = false;
+let switching = false;
 
 const map = L.map("map", {
   minZoom: 2, maxZoom: 15, maxBounds: [[-85, -180], [85, 180]], maxBoundsViscosity: 1,
   scrollWheelZoom: false, preferCanvas: true
 });
 map.attributionControl.setPrefix(false);
-map.createPane("basemap").style.zIndex = "230";
+map.createPane("basemap").style.zIndex = "220";
+map.createPane("imagery").style.zIndex = "230";
 L.control.scale({imperial: false}).addTo(map);
 const boundary = L.rectangle(asLeafletBounds(region), {
   color: "#a3c2d5", opacity: 0.8, weight: 1, dashArray: "5 5", fill: false, interactive: false
 }).addTo(map);
 const pointLayer = L.layerGroup().addTo(map);
 const focusLayer = L.layerGroup().addTo(map);
-fitArea();
+map.fitBounds(asLeafletBounds(region), {padding: [22, 22]});
+const satellite = L.tileLayer(
+  "https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/BlueMarble_NextGeneration/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpeg",
+  {pane: "imagery", maxNativeZoom: 8, noWrap: true, attribution: "NASA EOSDIS GIBS · Blue Marble"}
+);
+let imageryTimer;
+let imageryFailed = false;
+satellite.on("loading", () => {
+  clearTimeout(imageryTimer);
+  imageryTimer = setTimeout(() => setBasemap("simple", true), 8000);
+});
+satellite.on("load", () => clearTimeout(imageryTimer));
+satellite.on("tileerror", () => {
+  if (map.hasLayer(satellite)) setBasemap("simple", true);
+});
+
+function setBasemap(choice, failed = false) {
+  clearTimeout(imageryTimer);
+  imageryFailed = failed;
+  $("basemap").value = choice;
+  if (choice === "satellite") satellite.addTo(map);
+  else satellite.remove();
+  mapHelp();
+}
+
+function mapHelp() {
+  const message = imageryFailed ? "Satellite imagery unavailable. " :
+    basemapError && !map.hasLayer(satellite) ? "Simple basemap unavailable. " : "";
+  const action = map.scrollWheelZoom.enabled()
+    ? "Scroll to zoom. Esc releases scrolling."
+    : "Click or focus the map to scroll to zoom.";
+  $("map-help").textContent = message + action +
+    (map.hasLayer(satellite) ? " Blue Marble is background imagery." : "");
+}
 
 function asLeafletBounds(bounds) {
   return [[bounds[1], bounds[0]], [bounds[3], bounds[2]]];
@@ -38,7 +75,9 @@ function activeBounds() {
 }
 
 function fitArea() {
-  map.fitBounds(asLeafletBounds(activeBounds()), {padding: [22, 22], maxZoom: 10, animate: false});
+  const bounds = state.mode === "raw" && state.follow ? state.home : activeBounds();
+  map.fitBounds(asLeafletBounds(bounds), {padding: [22, 22], maxZoom: 10, animate: false});
+  syncView();
 }
 
 function element(tag, text = "", className = "") {
@@ -115,6 +154,8 @@ async function restoreSnapshot() {
       " · U.S. and Hawaii NRT snapshot downloaded Nov 14, 2026 (UTC)";
     state.sensor = "both";
     state.bounds = region;
+    state.home = region;
+    state.follow = true;
     state.area = "Contiguous U.S. view";
     setMode("raw");
     const warning = available.length < data.sensors.length ? " · One sensor snapshot could not load" : "";
@@ -134,8 +175,9 @@ function setMode(mode) {
   state.mode = mode;
   $("mode").value = mode;
   resetDates((mode === "raw" ? state.raw : state.team.days).keys());
+  if (state.tab === "map") fitArea();
+  else fitOnShow = true;
   render();
-  fitArea();
 }
 
 async function importFiles(files) {
@@ -170,6 +212,8 @@ async function importFiles(files) {
     state.raw = data.indexRaw(points);
     state.rawSource = "Imported FIRMS CSV · " + files.map(file => file.name).join(", ");
     state.bounds = data.extent;
+    state.home = boundsForPoints(points);
+    state.follow = true;
     state.area = "All imported areas";
     state.sensor = "both";
     setMode("raw");
@@ -177,6 +221,19 @@ async function importFiles(files) {
   } catch (error) {
     if (attempt === revision) status("Could not import data. " + error.message, true);
   }
+}
+
+function boundsForPoints(points) {
+  const bounds = [180, 85, -180, -85];
+  for (const {lat, lon} of points) {
+    bounds[0] = Math.min(bounds[0], lon);
+    bounds[1] = Math.min(bounds[1], lat);
+    bounds[2] = Math.max(bounds[2], lon);
+    bounds[3] = Math.max(bounds[3], lat);
+  }
+  const padded = [Math.max(-180, bounds[0] - 0.2), Math.max(-85, bounds[1] - 0.2),
+    Math.min(180, bounds[2] + 0.2), Math.min(85, bounds[3] + 0.2)];
+  return data.validBounds(padded) ? padded : data.extent;
 }
 
 function selectedSensors() {
@@ -263,13 +320,14 @@ function mapPoint(point, focus = false) {
     color: focus ? "#ffffff" : colors[point.sensor],
     fillColor: colors[point.sensor], fillOpacity: 0.76,
     weight: focus ? 2 : 0
-  }).bindPopup(() => popupFor(point));
+  }).bindPopup(() => popupFor(point), {autoPan: false});
 }
 
 function renderMap(points) {
   pointLayer.clearLayers();
   focusLayer.clearLayers();
   boundary.setBounds(asLeafletBounds(activeBounds()));
+  boundary.setStyle({opacity: state.mode === "raw" && state.follow ? 0 : 0.85});
   for (const point of points) mapPoint(point).addTo(pointLayer);
   const legend = $("legend");
   legend.replaceChildren();
@@ -313,7 +371,10 @@ function renderDetails() {
     button.setAttribute("aria-label", "Locate " + point.sensor + " point at " +
       point.lat.toFixed(4) + ", " + point.lon.toFixed(4));
     button.addEventListener("click", () => {
-      map.setView([point.lat, point.lon], Math.max(7, map.getZoom()), {animate: false});
+      showTab("map");
+      map.panInside([point.lat, point.lon], {padding: [22, 22], animate: false});
+      clearTimeout(moveTimer);
+      syncView();
       focusLayer.clearLayers();
       mapPoint(point, true).addTo(focusLayer).openPopup();
       $("map").focus({preventScroll: true});
@@ -333,7 +394,8 @@ function render() {
   visible = days.filter(day => !state.selected || day.date === state.selected).flatMap(day => day.points);
   state.page = Math.min(state.page, Math.max(0, Math.ceil(visible.length / pageSize) - 1));
   const bounds = activeBounds().map(value => value.toFixed(2)).join(", ");
-  $("area-name").textContent = raw ? state.area : state.team.area;
+  $("area-name").textContent = raw ? (state.follow ? "Following map view" : state.area) : state.team.area;
+  $("use-view").textContent = state.follow ? "Lock area" : "Follow map";
   $("area-name").title = "W, S, E, N: " + bounds;
   $("sensor-control").hidden = !raw;
   $("edit-area").disabled = !raw;
@@ -346,8 +408,18 @@ function render() {
     : "Select up to 366 consecutive UTC dates.";
   const pointCount = number.format(visible.length) + (raw ? " raw detections" : " exported points");
   $("list-summary").textContent = pointCount;
-  $("map-scope").textContent = (state.selected ? state.selected + " UTC · " : "") + pointCount +
-    (basemapError ? " · Basemap unavailable" : "");
+  const scopedDays = state.selected ? days.filter(day => day.date === state.selected) : days;
+  const counts = raw ? selectedSensors().map(sensor => {
+    const results = scopedDays.map(day => day.counts.find(item => item.sensor === sensor)?.count);
+    const known = results.filter(count => count != null);
+    const total = known.reduce((sum, count) => sum + count, 0);
+    const partial = known.length < results.length ? " (partial coverage)" : "";
+    return sensor + " " + (known.length ? number.format(total) + partial : "unknown");
+  }).join(" · ") : pointCount;
+  const scope = (state.selected ? state.selected + " UTC · " : "") + counts;
+  $("map-scope").textContent = scope;
+  $("list-summary").textContent = raw ? scope + " · " + pointCount : scope;
+  mapHelp();
   const records = Array.from((raw ? state.raw : state.team.days).keys()).sort();
   const datesText = records.length ? " · Record dates (UTC) " + records[0] + " to " + records.at(-1) : "";
   $("provenance").textContent = (sourceLabel() || "No dataset loaded") + datesText;
@@ -355,16 +427,18 @@ function render() {
     button.setAttribute("aria-pressed", String(state.sensor === button.dataset.sensor));
   }
   renderCalendar(days);
-  renderMap(visible);
+  if (state.tab === "map") renderMap(visible);
   renderDetails();
 }
 
 function applyArea(bounds, name, fit) {
+  state.follow = false;
   state.bounds = bounds;
   state.area = name;
   state.page = 0;
   render();
-  if (fit) fitArea();
+  if (fit && state.tab === "map") fitArea();
+  else if (fit) fitOnShow = true;
 }
 
 $("mode").addEventListener("change", event => {
@@ -379,10 +453,14 @@ $("upload").addEventListener("change", event => {
 $("restore").addEventListener("click", restoreSnapshot);
 $("fit-area").addEventListener("click", fitArea);
 $("use-view").addEventListener("click", () => {
-  const bounds = map.getBounds();
-  const next = [Math.max(-180, bounds.getWest()), Math.max(-85, bounds.getSouth()),
-    Math.min(180, bounds.getEast()), Math.min(85, bounds.getNorth())];
-  if (data.validBounds(next)) applyArea(next, "Selected map view", false);
+  if (state.tab !== "map") showTab("map");
+  if (state.follow) {
+    const bounds = viewportBounds();
+    if (bounds) applyArea(bounds, "Locked map view", false);
+  } else {
+    state.follow = true;
+    if (!syncView()) render();
+  }
 });
 $("edit-area").addEventListener("click", () => {
   const fields = $("bounds-form").elements;
@@ -431,6 +509,97 @@ $("clear-day").addEventListener("click", () => {
 $("previous").addEventListener("click", () => { state.page--; renderDetails(); });
 $("next").addEventListener("click", () => { state.page++; renderDetails(); });
 
+const tabs = ["map", "detections"];
+
+function showTab(tab, focusTab = false) {
+  if (tab !== state.tab) {
+    state.tab = tab;
+    for (const id of tabs) {
+      const active = id === tab;
+      $(id + "-tab").setAttribute("aria-selected", String(active));
+      $(id + "-tab").tabIndex = active ? 0 : -1;
+      $(id + "-panel").hidden = !active;
+    }
+    if (tab === "map") {
+      switching = true;
+      map.invalidateSize({pan: true});
+      if (fitOnShow) {
+        fitOnShow = false;
+        fitArea();
+      }
+      switching = false;
+      if (!syncView()) renderMap(visible);
+    } else {
+      setWheel(false);
+    }
+  }
+  if (focusTab) $(tab + "-tab").focus();
+}
+
+function viewportBounds() {
+  const box = map.getBounds();
+  const bounds = [Math.max(-180, box.getWest()), Math.max(-85, box.getSouth()),
+    Math.min(180, box.getEast()), Math.min(85, box.getNorth())];
+  return data.validBounds(bounds) ? bounds : null;
+}
+
+function syncView() {
+  if (switching || state.tab !== "map" || state.mode !== "raw" || !state.follow) return false;
+  const next = viewportBounds();
+  if (!next || next.every((value, index) => Math.abs(value - state.bounds[index]) < 0.000001)) return false;
+  state.bounds = next;
+  state.page = 0;
+  render();
+  return true;
+}
+
+function resizeMap() {
+  if (state.tab !== "map") return;
+  map.invalidateSize({pan: true});
+  syncView();
+}
+
+function setWheel(active) {
+  if (active) map.scrollWheelZoom.enable();
+  else map.scrollWheelZoom.disable();
+  mapHelp();
+}
+
+for (const [index, tab] of tabs.entries()) {
+  const button = $(tab + "-tab");
+  button.addEventListener("click", () => showTab(tab));
+  button.addEventListener("keydown", event => {
+    const target = {ArrowLeft: 1 - index, ArrowRight: 1 - index, Home: 0, End: 1};
+    if (!Object.hasOwn(target, event.key)) return;
+    event.preventDefault();
+    showTab(tabs[target[event.key]], true);
+  });
+}
+$("basemap").addEventListener("change", event => setBasemap(event.target.value));
+$("resize-map").addEventListener("click", event => {
+  const large = $("map").classList.toggle("is-larger");
+  event.currentTarget.setAttribute("aria-pressed", String(large));
+  event.currentTarget.textContent = large ? "Standard size" : "Larger map";
+  resizeMap();
+});
+$("map").addEventListener("focusin", () => setWheel(true));
+$("map").addEventListener("focusout", event => {
+  if (!$("map").contains(event.relatedTarget)) setWheel(false);
+});
+$("map").addEventListener("pointerdown", () => setWheel(true));
+document.addEventListener("pointerdown", event => {
+  if (!$("map").contains(event.target)) setWheel(false);
+});
+$("map").addEventListener("keydown", event => {
+  if (event.key === "Escape") setWheel(false);
+});
+map.on("moveend", () => {
+  clearTimeout(moveTimer);
+  moveTimer = setTimeout(syncView, 90);
+});
+new ResizeObserver(resizeMap).observe($("map"));
+
+setBasemap("satellite");
 render();
 restoreSnapshot();
 
