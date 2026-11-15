@@ -49,7 +49,7 @@
   function renderSensors() {
     if (!views.size) createViews();
     const bounds = activeBounds();
-    const dates = state.backend ? [...state.backend.days.keys()].sort() : [];
+    const dates = state.result ? [...state.result.days.keys()].sort() : [];
     const dateSelect = $("compare-date");
     if (Array.from(dateSelect.options, option => option.value).join() !== dates.join()) {
       dateSelect.replaceChildren(...dates.map(date => new Option(date, date)));
@@ -57,20 +57,22 @@
     dateSelect.value = state.selected;
     dateSelect.disabled = !dates.length;
     $("compare-fit").disabled = !dates.length;
-    $("sensor-scope").textContent = state.backend ? state.backend.area + " · " + sourceLabel()
-      : "Sensor comparison will appear when the backend is connected.";
+    $("sensor-scope").textContent = state.result ? selection.area + " · " + sourceLabel()
+      : "Sensor comparison will appear after you select an area and dates.";
     $("compare-visual-note").textContent = "Imagery: VIIRS · " + scene.date +
       " · Blue Marble fills gaps. The observation date controls detections.";
-    const counts = state.backend?.days.get(state.selected);
+    const counts = state.result?.days.get(state.selected);
+    const partial = state.result?.partialByDay.get(state.selected);
     for (const [sensor, {points, outline}] of views) {
       const count = counts?.[sensor];
-      $("compare-" + sensor.toLowerCase()).textContent = count == null ? "Unavailable" : number.format(count);
+      $("compare-" + sensor.toLowerCase()).textContent = count == null ? "Unavailable"
+        : number.format(count) + (partial?.includes(sensor) ? " (partial)" : "");
       points.clearLayers();
       for (const point of state.points) {
         if (point.sensor === sensor) mapPoint(point).addTo(points);
       }
       outline.setBounds(asLeafletBounds(bounds));
-      outline.setStyle({opacity: state.backend ? 0.8 : 0});
+      outline.setStyle({opacity: state.result && fixedBounds ? 0.8 : 0});
     }
     const signature = bounds.join(",");
     if (signature !== lastArea) fitComparison();
@@ -78,7 +80,7 @@
   }
 
   window.addEventListener("hotspot:compare", renderSensors);
-  $("compare-date").addEventListener("change", event => selectBackendDay(event.target.value));
+  $("compare-date").addEventListener("change", event => selectDay(event.target.value));
   $("compare-fit").addEventListener("click", fitComparison);
 
   function resizeComparison() {
