@@ -35,12 +35,33 @@
     <div class="actions">
       <p id="status" class="status" role="status">Loading the detection calendar…</p>
       <button id="retry-data" type="button">Reload data</button>
+      <button id="fetch-next" type="button" hidden>Load more map records</button>
     </div>
     <section id="map-panel" role="tabpanel" aria-labelledby="map-tab">
+      <section id="archive-panel" class="archive-panel" aria-labelledby="archive-title" hidden>
+        <div class="panel-heading">
+          <div><h2 id="archive-title">Historical burning activity</h2><p>Suomi-NPP-equivalent active cell-days, by UTC month</p></div>
+          <label class="filter">Calendar year <select id="archive-year"></select></label>
+        </div>
+        <form id="archive-selection" class="filters archive-filters">
+          <label class="filter" for="archive-bounds">Area (west, south, east, north)
+            <input id="archive-bounds" name="bbox" size="27" required aria-describedby="archive-bounds-help">
+          </label>
+          <label class="filter">From (UTC) <input id="archive-start" type="date" required></label>
+          <label class="filter">Through (UTC) <input id="archive-end" type="date" required></label>
+          <button type="submit">Apply selection</button>
+          <button id="archive-reset" type="button">Reset area and dates</button>
+        </form>
+        <p id="archive-bounds-help" class="subtle">Use decimal degrees. A west value greater than east crosses the antimeridian.</p>
+        <div id="archive-months" class="archive-months"></div>
+        <p id="archive-month-summary" class="subtle" aria-live="polite"></p>
+        <p id="archive-peak" class="subtle"></p>
+      </section>
       <section class="map-panel" aria-labelledby="map-title">
         <div class="panel-heading map-heading">
           <div><h2 id="map-title">Hotspot map</h2><p id="map-scope"></p></div>
           <div class="map-tools">
+            <label id="map-layer-control" class="basemap-label" hidden>Layer <select id="map-layer"><option value="cells">Active cells</option><option value="detections">Raw detections</option></select></label>
             <label class="basemap-label">Basemap <select id="basemap"><option value="satellite">Satellite</option><option value="simple">Simple</option></select></label>
             <button id="fit-area" type="button">Fit area</button>
             <button id="resize-map" type="button" aria-pressed="false">Larger map</button>
@@ -91,6 +112,7 @@
       <p id="coverage"></p>
       <p>Raw counts are satellite observations of thermal anomalies. Repeated observations may refer to the same fire. MODIS and VIIRS have different resolutions and overpass times. Clouds, smoke, and gaps between overpasses can hide activity.</p>
       <p>A zero means the available source reported no detections in the study area on that day. A question mark means the source is unavailable.</p>
+      <p id="archive-method" hidden>The calendar counts an H3 cell once for each UTC day with eligible activity. Monthly estimates convert standard-processing observations to a common Suomi-NPP scale. Recent provisional detections appear in the raw map and table. <a href="/api/validation">Calibration results</a></p>
       <p><a href="https://firms.modaps.eosdis.nasa.gov/download/">NASA FIRMS archive</a> · <a href="https://forum.earthdata.nasa.gov/viewtopic.php?t=5178">NASA detection guidance</a> · <a href="https://www.naturalearthdata.com/">Natural Earth basemap</a></p>
     </details>
     </section>

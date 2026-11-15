@@ -1,17 +1,19 @@
 # Hotspot Explorer
 
-The frontend renders the MODIS and VIIRS calendar, hotspot map, detection table,
-and side-by-side sensor comparison. It requires the backend to supply detection
-data and shows a connection error when the API is unavailable.
+The frontend displays the harmonized monthly calendar, daily hotspot map,
+detection table, and side-by-side sensor comparison. Run the [archive setup](../backend/howtotest.md)
+to serve the app and data on the same origin. The five-day demo also works with
+the raw detection calendar and maps.
 
 ## Connect the backend
 
 Serve this directory as the website and route the following relative paths to
 the backend on the website's origin:
 
-- `GET /api/calendar` supplies the study bounding box, source labels, export
-  version, and reported MODIS and VIIRS counts by UTC date. Zero is a reported
-  count. A null count means the source is unavailable.
+- `GET /api/calendar` supplies the study bounding box, source labels, release
+  version, and calendar rows by UTC month for an archive. Daily rows include
+  the reported MODIS and VIIRS counts. Zero is a reported count. A null count
+  means the source is unavailable.
 - `GET /api/map?date=YYYY-MM-DD` supplies the selected day's GeoJSON points and
   metadata for the same export version.
 

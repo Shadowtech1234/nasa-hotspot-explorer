@@ -11,7 +11,7 @@
     for (const sensor of sensors) {
       const target = $("compare-map-" + sensor.toLowerCase());
       const view = L.map(target, {
-        minZoom: 2, maxZoom: 15, maxBounds: [[-85, -180], [85, 180]], maxBoundsViscosity: 1,
+        minZoom: 0, maxZoom: 15, maxBounds: [[-85, -180], [85, 180]], maxBoundsViscosity: 1,
         attributionControl: true, preferCanvas: true, scrollWheelZoom: false,
         zoomAnimation: false, fadeAnimation: !reducedMotion
       });
@@ -20,7 +20,7 @@
       const attribution = "NASA EOSDIS GIBS";
       L.imageOverlay(globalImageUrl, globalImagery.getBounds(), {attribution}).addTo(view);
       L.imageOverlay(scene.image, sceneBounds, {pane: "detail-imagery", attribution}).addTo(view);
-      const outline = L.rectangle(asLeafletBounds(region), {
+      const outline = L.polyline(areaOutline(region), {
         color: "#fff", opacity: .8, weight: 1, dashArray: "4 5", fill: false, interactive: false
       }).addTo(view);
       const points = L.layerGroup().addTo(view);
@@ -64,12 +64,14 @@
     const counts = state.backend?.days.get(state.selected);
     for (const [sensor, {points, outline}] of views) {
       const count = counts?.[sensor];
-      $("compare-" + sensor.toLowerCase()).textContent = count == null ? "Unavailable" : number.format(count);
+      const displayed = state.points.filter(point => point.sensor === sensor).length;
+      $("compare-" + sensor.toLowerCase()).textContent = count == null ? "Unavailable" : number.format(count) +
+        (state.offsets[sensor] != null ? " · " + number.format(displayed) + " plotted" : "");
       points.clearLayers();
       for (const point of state.points) {
         if (point.sensor === sensor) mapPoint(point).addTo(points);
       }
-      outline.setBounds(asLeafletBounds(bounds));
+      outline.setLatLngs(areaOutline(bounds));
       outline.setStyle({opacity: state.backend ? 0.8 : 0});
     }
     const signature = bounds.join(",");

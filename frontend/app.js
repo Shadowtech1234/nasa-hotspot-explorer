@@ -3,11 +3,13 @@
 const $ = id => document.getElementById(id);
 const sensors = ["MODIS", "VIIRS"];
 const region = [-128, 23, -64, 51];
-const colors = {MODIS: "#ffac69", VIIRS: "#68dfed"};
+const colors = {MODIS: "#ffac69", VIIRS: "#68dfed", cells: "#d6acff"};
 const number = new Intl.NumberFormat("en-US");
 const monthName = new Intl.DateTimeFormat("en-US", {month: "long", year: "numeric", timeZone: "UTC"});
 const pageSize = 20;
-const state = {backend: null, sensor: "both", selected: "", page: 0, tab: "map", points: []};
+const state = {backend: null, history: null, selection: null, month: "", sensor: "both", selected: "", page: 0,
+  tab: "map", points: [], cells: [], offsets: {}, mapPending: false};
+let historyRequest;
 let calendarRequest;
 let mapRequest;
 let basemapError = false;
@@ -17,7 +19,7 @@ let visible = [];
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const map = L.map("map", {
   fadeAnimation: !reducedMotion, zoomAnimation: !reducedMotion, markerZoomAnimation: !reducedMotion,
-  minZoom: 2, maxZoom: 15, maxBounds: [[-85, -180], [85, 180]], maxBoundsViscosity: 1,
+  minZoom: 0, maxZoom: 15, maxBounds: [[-85, -180], [85, 180]], maxBoundsViscosity: 1,
   scrollWheelZoom: false, preferCanvas: true
 });
 map.attributionControl.setPrefix(false);
@@ -25,7 +27,7 @@ map.createPane("basemap").style.zIndex = "220";
 map.createPane("global-imagery").style.zIndex = "225";
 map.createPane("imagery").style.zIndex = "230";
 L.control.scale({imperial: false, maxWidth: 88}).addTo(map);
-const boundary = L.rectangle(asLeafletBounds(region), {
+const boundary = L.polyline(areaOutline(region), {
   color: "#a3c2d5", opacity: 0.8, weight: 1, dashArray: "5 5", fill: false, interactive: false
 }).addTo(map);
 const pointLayer = L.layerGroup().addTo(map);
@@ -105,7 +107,13 @@ function mapHelp() {
 }
 
 function asLeafletBounds(bounds) {
-  return [[bounds[1], bounds[0]], [bounds[3], bounds[2]]];
+  const [west, south, east, north] = bounds;
+  return west <= east ? [[south, west], [north, east]] : [[south, -180], [north, 180]];
+}
+
+function areaOutline([west, south, east, north]) {
+  const longitude = west <= east ? [[west, east]] : [[west, 180], [-180, east]];
+  return longitude.map(([left, right]) => [[south, left], [north, left], [north, right], [south, right], [south, left]]);
 }
 
 function activeBounds() {
@@ -130,6 +138,13 @@ function status(text, error = false) {
 
 function sourceLabel() {
   if (!state.backend) return "Backend data unavailable";
+  if (state.history) {
+    const row = state.backend.rowsByDay.get(state.selected);
+    const standard = row?.standard_platforms?.join(", ");
+    const provisional = row?.provisional_platforms?.join(", ");
+    return ["NASA FIRMS", standard && standard, provisional && "Provisional · " + provisional,
+      !standard && !provisional && "No archive inputs for this date"].filter(Boolean).join(" · ");
+  }
   const labels = {MODIS_SP: "MODIS", VIIRS_SNPP_SP: "Suomi-NPP VIIRS"};
   const sources = sensors.map(sensor => {
     const source = state.backend.sources[sensor];
@@ -140,32 +155,64 @@ function sourceLabel() {
 
 async function fetchApi(path, signal) {
   const response = await fetch(path, {signal, cache: "no-store"});
-  if (response.status === 503) throw new Error("The backend export is unavailable.");
-  if (!response.ok) throw new Error("The API returned HTTP " + response.status + ".");
+  if (!response.ok) {
+    const {detail} = await response.json().catch(() => ({}));
+    throw new Error(typeof detail === "string" ? detail : "The API returned HTTP " + response.status + ".");
+  }
   return response.json();
 }
 
-async function loadBackend() {
-  calendarRequest?.abort();
-  mapRequest?.abort();
+function applyCalendar(calendar) {
+  if (!Array.isArray(calendar.bbox) || calendar.bbox.length !== 4 ||
+      !calendar.bbox.every(Number.isFinite) || !calendar.data_version ||
+      !calendar.sources || !Array.isArray(calendar.rows) || !calendar.rows.length) {
+    throw new Error("The API calendar is missing dates, bounds, or sources.");
+  }
+  const days = new Map(calendar.rows.map(row => [row.date_utc, row.sensor_detections]));
+  const subset = calendar.archive_bbox && calendar.archive_bbox.join() !== calendar.bbox.join();
+  const area = calendar.region === "northern-california-demo" ? "Northern California demo" : calendar.region;
+  state.backend = {...calendar, days, rowsByDay: new Map(calendar.rows.map(row => [row.date_utc, row])),
+    area: subset ? "Selected area" : area};
+}
+
+function dateOffset(day, offset) {
+  const value = new Date(day + "T00:00:00Z");
+  value.setUTCDate(value.getUTCDate() + offset);
+  return value.toISOString().slice(0, 10);
+}
+
+function apiUrl(path, params) {
+  return path + "?" + new URLSearchParams(params);
+}
+
+function archiveUrl(path, params) {
+  return apiUrl(path, {...params, bbox: state.history.bbox.join(","), version: state.history.data_version});
+}
+
+async function loadBackend(selection = null) {
+  historyRequest?.abort();
   const request = new AbortController();
-  calendarRequest = request;
+  historyRequest = request;
   $("retry-data").disabled = true;
-  status("Loading the detection calendar…");
+  status("Loading the burning activity calendar…");
   try {
-    const calendar = await fetchApi("/api/calendar", request.signal);
-    if (!Array.isArray(calendar.bbox) || calendar.bbox.length !== 4 ||
-        !calendar.bbox.every(Number.isFinite) || !calendar.data_version ||
-        !calendar.sources || !Array.isArray(calendar.rows) || !calendar.rows.length) {
-      throw new Error("The API calendar is missing dates, bounds, or sources.");
-    }
-    const days = new Map(calendar.rows.map(row => [row.date_utc, row.sensor_detections]));
+    const calendar = await fetchApi(selection ? apiUrl("/api/calendar", selection) : "/api/calendar", request.signal);
     if (request.signal.aborted) return;
-    state.backend = {...calendar, days, area: calendar.region === "northern-california-demo"
-      ? "Northern California demo" : calendar.region};
-    if (state.tab === "map") fitArea();
-    else fitOnShow = true;
-    await selectBackendDay([...days.keys()].sort()[0]);
+    state.selection = selection;
+    if (calendar.archive) {
+      state.history = calendar;
+      const previous = calendar.rows.find(row => row.date_utc === state.month);
+      const latest = calendar.rows.findLast(row => row.activity !== null || row.provisional_days > 0) ?? calendar.rows.at(-1);
+      configureArchive(calendar);
+      await selectArchiveMonth(previous ?? latest, true);
+    } else {
+      calendarRequest?.abort();
+      state.history = null;
+      applyCalendar(calendar);
+      if (state.tab === "map") fitArea();
+      else fitOnShow = true;
+      await selectBackendDay(calendar.rows[0].date_utc);
+    }
   } catch (error) {
     if (!request.signal.aborted) {
       status("Could not load the detection calendar. " + error.message, true);
@@ -175,6 +222,101 @@ async function loadBackend() {
   }
 }
 
+function configureArchive(calendar) {
+  $("archive-bounds").value = calendar.bbox.join(", ");
+  for (const id of ["archive-start", "archive-end"]) {
+    $(id).min = calendar.archive_start;
+    $(id).max = dateOffset(calendar.archive_end_exclusive, -1);
+  }
+  $("archive-start").value = calendar.start;
+  $("archive-end").value = dateOffset(calendar.end_exclusive, -1);
+  const years = [...new Set(calendar.rows.map(row => row.date_utc.slice(0, 4)))].reverse();
+  $("archive-year").replaceChildren(...years.map(year => new Option(year, year)));
+}
+
+function renderArchive() {
+  const current = state.history.rows.find(row => row.date_utc === state.month);
+  const rows = state.history.rows.filter(row => row.date_utc.startsWith($("archive-year").value));
+  const focused = document.activeElement?.dataset.month;
+  $("archive-months").replaceChildren(...rows.map(row => {
+    const button = element("button", "", row.usable_days < row.days_in_month ? "partial" : "");
+    button.type = "button";
+    button.dataset.month = row.date_utc;
+    button.setAttribute("aria-pressed", String(row === current));
+    const amount = row.activity === null ? (row.provisional_days ? "Provisional only" : "Index unavailable")
+      : number.format(Math.round(row.activity)) + (row.usable_days < row.days_in_month ? " · partial" : "");
+    button.append(element("span", monthName.format(new Date(row.date_utc))), element("strong", amount, "harmonized"));
+    return button;
+  }));
+  if (focused) $("archive-months").querySelector('[data-month="' + focused + '"]')?.focus({preventScroll: true});
+  if (!current) return;
+  const sourceDays = Object.entries(current.source_days).map(([source, days]) => source + " · " + days + " days");
+  const observed = current.observed_cell_days === null ? "Standard-processing activity unavailable"
+    : number.format(current.observed_cell_days) + " observed cell-days";
+  const estimate = sourceDays.length && (current.source_days["Suomi-NPP"] !== current.usable_days) ? "Includes estimates" : "";
+  const baseline = current.historical_median === null ? "" :
+    "Historical median " + number.format(Math.round(current.historical_median)) + " · Percentile " +
+      number.format(Math.round(current.historical_percentile)) + " across " + current.baseline_years + " years";
+  $("archive-month-summary").textContent = [observed, current.usable_days + " of " + current.days_in_month + " comparable days",
+    estimate, ...sourceDays, baseline].filter(Boolean).join(" · ");
+  const peak = state.history.rows.filter(row => row.usable_days === row.days_in_month).reduce(
+    (best, row) => !best || row.activity > best.activity ? row : best, null);
+  $("archive-peak").textContent = peak ? "Peak complete month in this selection · " + monthName.format(new Date(peak.date_utc)) +
+    " · " + number.format(Math.round(peak.activity)) + " cell-days" : "";
+}
+
+async function selectArchiveMonth(month, refit = false) {
+  if (!month) return;
+  calendarRequest?.abort();
+  mapRequest?.abort();
+  const request = new AbortController();
+  calendarRequest = request;
+  status("Loading daily observations for " + monthName.format(new Date(month.date_utc)) + "…");
+  try {
+    const daily = await fetchApi(archiveUrl("/api/calendar", {
+      start: month.first_day, end: dateOffset(month.last_day, 1), granularity: "day"
+    }), request.signal);
+    if (request.signal.aborted) return;
+    applyCalendar(daily);
+    state.month = month.date_utc;
+    $("archive-year").value = state.month.slice(0, 4);
+    renderArchive();
+    if (refit && state.tab === "map") fitArea();
+    else if (refit) fitOnShow = true;
+    const preferred = state.backend.days.has(state.selected) ? state.selected : (daily.rows.findLast(row =>
+      Object.values(row.sensor_detections).some(count => count > 0)) ?? daily.rows.at(-1)).date_utc;
+    await selectBackendDay(preferred);
+  } catch (error) {
+    if (!request.signal.aborted) status("Could not load daily observations. " + error.message, true);
+  }
+}
+
+function mapPage(date, layer, signal, sensor, offset = 0) {
+  const params = {date, layer, offset, limit: layer === "cells" ? 2500 : 1500};
+  if (sensor) params.sensor = sensor;
+  return fetchApi(state.history ? archiveUrl("/api/map", params) : apiUrl("/api/map", {date}), signal);
+}
+
+function acceptMapPage(collection, date, key) {
+  if (collection.metadata?.data_version !== state.backend.data_version) {
+    throw new Error("The export changed. Reload the backend data to refresh it.");
+  }
+  if (collection.type !== "FeatureCollection" || !Array.isArray(collection.features) || collection.metadata.date_utc !== date) {
+    throw new Error("The API map is missing a valid daily GeoJSON export.");
+  }
+  for (const {geometry, properties} of collection.features) {
+    const [lon, lat] = geometry.coordinates;
+    if (key === "cells") {
+      state.cells.push({lon, lat, date, cell: properties.cell, platforms: properties.platforms});
+    } else {
+      state.points.push({lon, lat, date, sensor: properties.sensor, time: properties.acquired_at_utc.slice(11, 16),
+        satellite: properties.platform, confidence: properties.confidence_raw, frp: properties.frp_mw,
+        processing: properties.processing, eligible: properties.eligible});
+    }
+  }
+  state.offsets[key] = collection.metadata.next_offset;
+}
+
 async function selectBackendDay(date) {
   mapRequest?.abort();
   const request = new AbortController();
@@ -182,29 +324,57 @@ async function selectBackendDay(date) {
   state.selected = date;
   state.page = 0;
   state.points = [];
+  state.cells = [];
+  state.offsets = {};
+  state.mapPending = true;
+  if (state.history) {
+    const day = state.backend.rowsByDay.get(date);
+    $("map-layer").value = !day.standard_platforms.length && day.provisional_platforms.length ? "detections" : "cells";
+  }
   status("Loading backend detections for " + date + "…");
   render();
   try {
-    const collection = await fetchApi("/api/map?date=" + encodeURIComponent(date), request.signal);
+    const pages = state.history ? await Promise.all([
+      mapPage(date, "cells", request.signal), ...sensors.map(sensor => mapPage(date, "detections", request.signal, sensor))
+    ]) : [await mapPage(date, "detections", request.signal)];
     if (request.signal.aborted) return;
-    if (collection.metadata?.data_version !== state.backend.data_version) {
-      throw new Error("The export changed. Reload the backend data to refresh it.");
-    }
-    if (collection.type !== "FeatureCollection" || !Array.isArray(collection.features) ||
-        collection.metadata.date_utc !== date) {
-      throw new Error("The API map is missing a valid daily GeoJSON export.");
-    }
-    state.points = collection.features.map(({geometry, properties}) => ({
-      lon: geometry.coordinates[0], lat: geometry.coordinates[1], date,
-      sensor: properties.sensor, time: properties.acquired_at_utc.slice(11, 16),
-      satellite: properties.platform, confidence: properties.confidence_raw, frp: properties.frp_mw
-    }));
+    const keys = state.history ? ["cells", ...sensors] : ["detections"];
+    pages.forEach((collection, index) => acceptMapPage(collection, date, keys[index]));
     status(sourceLabel());
   } catch (error) {
     if (request.signal.aborted) return;
     status("Detection map unavailable. " + error.message, true);
   }
+  state.mapPending = false;
   render();
+}
+
+function nextMapKeys() {
+  const keys = state.tab === "map" && $("map-layer").value === "cells" ? ["cells"]
+    : state.tab === "compare" ? sensors : selectedSensors();
+  return keys.filter(key => state.offsets[key] != null);
+}
+
+async function loadMoreMap() {
+  if (state.mapPending) return;
+  const keys = nextMapKeys();
+  const signal = mapRequest.signal;
+  const date = state.selected;
+  state.mapPending = true;
+  render();
+  try {
+    const pages = await Promise.all(keys.map(key => mapPage(date, key === "cells" ? key : "detections", signal,
+      key === "cells" ? null : key, state.offsets[key])));
+    if (signal.aborted) return;
+    pages.forEach((page, index) => acceptMapPage(page, date, keys[index]));
+  } catch (error) {
+    if (!signal.aborted) status("Could not load more map records. " + error.message, true);
+  } finally {
+    if (!signal.aborted) {
+      state.mapPending = false;
+      render();
+    }
+  }
 }
 
 function fetchLocal(path) {
@@ -230,10 +400,11 @@ function selectedSensors() {
 
 function backendDay(date) {
   const counts = state.backend.days.get(date);
-  return {date, counts: selectedSensors().map(sensor => ({sensor, count: counts[sensor]}))};
+  const row = state.backend.rowsByDay.get(date);
+  return {date, row, counts: selectedSensors().map(sensor => ({sensor, count: counts[sensor]}))};
 }
 
-function calendarCell({date, counts}) {
+function calendarCell({date, counts, row}) {
   const cell = element("button", "", "day");
   cell.type = "button";
   cell.classList.toggle("has-activity", counts.some(({count}) => count > 0));
@@ -242,6 +413,7 @@ function calendarCell({date, counts}) {
   const description = counts.map(({sensor, count}) =>
     sensor + ": " + (count === null ? "source unavailable"
       : count === 0 ? "no records" : number.format(count)));
+  if (row.provisional_platforms?.length) description.push("Includes provisional data");
   cell.setAttribute("aria-label", date + " UTC. " + description.join(". "));
   cell.title = description.join(" · ");
   cell.append(element("strong", String(Number(date.slice(8)))));
@@ -289,6 +461,7 @@ function popupFor(point) {
   if (point.satellite) popup.append(element("div", "Satellite: " + point.satellite));
   if (point.confidence) popup.append(element("div", "Confidence: " + point.confidence));
   if (point.frp != null) popup.append(element("div", "Fire radiative power: " + point.frp + " MW"));
+  if (point.processing === "NRT") popup.append(element("div", "Provisional detection"));
   return popup;
 }
 
@@ -304,13 +477,24 @@ function mapPoint(point, focus = false) {
 function renderMap(points) {
   pointLayer.clearLayers();
   focusLayer.clearLayers();
-  boundary.setBounds(asLeafletBounds(activeBounds()));
+  boundary.setLatLngs(areaOutline(activeBounds()));
   boundary.setStyle({opacity: state.backend ? 0.85 : 0});
-  for (const point of points) mapPoint(point).addTo(pointLayer);
+  const showCells = state.history && $("map-layer").value === "cells";
+  if (showCells) {
+    for (const cell of state.cells) {
+      const modis = cell.platforms.some(platform => platform === "Terra" || platform === "Aqua");
+      const viirs = cell.platforms.some(platform => platform !== "Terra" && platform !== "Aqua");
+      if ((state.sensor === "MODIS" && !modis) || (state.sensor === "VIIRS" && !viirs)) continue;
+      L.circleMarker([cell.lat, cell.lon], {radius: 3.5, weight: 0, fillColor: colors.cells, fillOpacity: 0.8})
+        .bindPopup(() => element("span", "Active cell " + cell.cell + " · " + cell.platforms.join(", "))).addTo(pointLayer);
+    }
+  } else {
+    for (const point of points) mapPoint(point).addTo(pointLayer);
+  }
   const legend = $("legend");
   legend.replaceChildren();
-  for (const sensor of selectedSensors()) {
-    const label = element("span", "", sensor.toLowerCase());
+  for (const sensor of showCells ? ["Active cell centers"] : selectedSensors()) {
+    const label = element("span", "", showCells ? "harmonized" : sensor.toLowerCase());
     const dot = element("i", "", "dot");
     dot.setAttribute("aria-hidden", "true");
     label.append(dot, document.createTextNode(sensor));
@@ -331,7 +515,9 @@ function renderDetails() {
   }
   const table = element("table");
   const header = table.createTHead().insertRow();
-  for (const title of ["Date (UTC)", "Sensor", "Latitude", "Longitude", "Map"]) {
+  const headings = state.history ? ["Date (UTC)", "Sensor", "Platform", "Processing", "Latitude", "Longitude", "Map"]
+    : ["Date (UTC)", "Sensor", "Latitude", "Longitude", "Map"];
+  for (const title of headings) {
     const cell = element("th", title);
     cell.scope = "col";
     header.append(cell);
@@ -340,13 +526,15 @@ function renderDetails() {
   const first = state.page * pageSize;
   for (const point of visible.slice(first, first + pageSize)) {
     const row = body.insertRow();
-    for (const value of [point.date + (point.time ? " " + point.time : ""), point.sensor,
+    const attributes = state.history ? [point.satellite, point.processing === "NRT" ? "Provisional" : "Standard"] : [];
+    for (const value of [point.date + (point.time ? " " + point.time : ""), point.sensor, ...attributes,
       point.lat.toFixed(4), point.lon.toFixed(4)]) row.insertCell().textContent = value;
     const button = element("button", "Locate");
     button.type = "button";
     button.setAttribute("aria-label", "Locate " + point.sensor + " point at " +
       point.lat.toFixed(4) + ", " + point.lon.toFixed(4));
     button.addEventListener("click", () => {
+      if (state.history) $("map-layer").value = "detections";
       showTab("map");
       map.panInside([point.lat, point.lon], {padding: [22, 22], animate: false});
       focusLayer.clearLayers();
@@ -372,14 +560,27 @@ function render() {
   const counts = selected?.counts.map(({sensor, count}) =>
     sensor + " " + (count === null ? "unavailable" : number.format(count))).join(" · ");
   const scope = selected ? state.selected + " UTC · " + counts : "No backend data loaded";
-  $("map-scope").textContent = scope;
-  $("list-summary").textContent = scope;
+  const cells = selected?.row.observed_cell_days;
+  const cellsLabel = cells == null ? "Active cells unavailable" : number.format(cells) + " active cells across sensors";
+  $("map-scope").textContent = state.history && $("map-layer").value === "cells" && selected
+    ? state.selected + " UTC · " + cellsLabel : scope;
+  $("list-summary").textContent = scope + (state.history && selected?.row.provisional_platforms.length ? " · includes provisional" : "");
   mapHelp();
   $("provenance").textContent = sourceLabel();
   $("coverage").textContent = state.backend
     ? "Study bounds (west, south, east, north) " + bounds + ". Satellite observation coverage is unknown."
     : "";
   $("download-csv").disabled = !visible.length;
+  $("download-csv").textContent = state.history && selectedSensors().some(sensor => state.offsets[sensor] != null)
+    ? "Download loaded detections" : "Download filtered CSV";
+  $("archive-panel").hidden = !state.history;
+  $("map-layer-control").hidden = !state.history;
+  $("archive-method").hidden = !state.history;
+  $("calendar-title").textContent = state.history ? "Daily observations" : "Burning activity calendar";
+  $("fetch-next").hidden = !state.history || !nextMapKeys().length;
+  $("fetch-next").disabled = state.mapPending;
+  $("fetch-next").textContent = state.tab === "map" && $("map-layer").value === "cells"
+    ? "Load more active cells" : "Load more detections";
   for (const button of document.querySelectorAll("[data-sensor]")) {
     button.setAttribute("aria-pressed", String(state.sensor === button.dataset.sensor));
   }
@@ -398,10 +599,11 @@ function csvCell(value) {
 }
 
 function exportCsv() {
+  const archiveColumns = state.history ? ["processing", "eligible_for_index"] : [];
   const rows = [
-    ["date_utc", "time_utc", "sensor", "satellite", "latitude", "longitude", "confidence", "frp_mw"],
+    ["date_utc", "time_utc", "sensor", "satellite", "latitude", "longitude", "confidence", "frp_mw", ...archiveColumns],
     ...visible.map(point => [point.date, point.time, point.sensor, point.satellite, point.lat, point.lon,
-      point.confidence, point.frp])
+      point.confidence, point.frp, ...(state.history ? [point.processing, point.eligible] : [])])
   ];
   return rows.map(row => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
@@ -417,7 +619,23 @@ $("download-csv").addEventListener("click", () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 
-$("retry-data").addEventListener("click", loadBackend);
+$("retry-data").addEventListener("click", () => loadBackend(state.selection));
+$("fetch-next").addEventListener("click", loadMoreMap);
+$("map-layer").addEventListener("change", render);
+$("archive-selection").addEventListener("submit", event => {
+  event.preventDefault();
+  loadBackend({bbox: $("archive-bounds").value, start: $("archive-start").value, end: dateOffset($("archive-end").value, 1)});
+});
+$("archive-reset").addEventListener("click", () => loadBackend());
+$("archive-year").addEventListener("change", event => {
+  const rows = state.history.rows.filter(row => row.date_utc.startsWith(event.target.value));
+  renderArchive();
+  selectArchiveMonth(rows.findLast(row => row.activity !== null || row.provisional_days > 0) ?? rows.at(-1));
+});
+$("archive-months").addEventListener("click", event => {
+  const day = event.target.closest("[data-month]")?.dataset.month;
+  if (day) selectArchiveMonth(state.history.rows.find(row => row.date_utc === day));
+});
 $("fit-area").addEventListener("click", fitArea);
 for (const button of document.querySelectorAll("[data-sensor]")) {
   button.addEventListener("click", () => {
@@ -459,6 +677,9 @@ function showTab(tab, focusTab = false) {
     }
   }
   if (tab === "compare") window.dispatchEvent(new Event("hotspot:compare"));
+  $("fetch-next").hidden = !state.history || !nextMapKeys().length;
+  $("fetch-next").textContent = tab === "map" && $("map-layer").value === "cells"
+    ? "Load more active cells" : "Load more detections";
   if (focusTab) $(tab + "-tab").focus();
 }
 
