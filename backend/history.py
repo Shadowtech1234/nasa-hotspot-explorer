@@ -59,10 +59,13 @@ def build_cells(db, output, raw):
 
 
 def insert_days(db, days):
+    # Bind one document so DuckDB can convert the date coverage in bulk.
     db.execute("""
-        CREATE TEMP TABLE days AS SELECT unnest(?::DATE[]) AS date_utc, unnest(?::INTEGER[]) AS sp,
-            unnest(?::INTEGER[]) AS nrt, unnest(?::INTEGER[]) AS available, unnest(?::INTEGER[]) AS mode
-    """, [list(days), *([info[field] for info in days.values()] for field in ("sp", "nrt", "available", "mode"))])
+        CREATE TEMP TABLE days AS SELECT key::DATE AS date_utc,
+            (value->>'sp')::INTEGER AS sp, (value->>'nrt')::INTEGER AS nrt,
+            (value->>'available')::INTEGER AS available, (value->>'mode')::INTEGER AS mode
+        FROM json_each(?::JSON)
+    """, [json.dumps(days, separators=(",", ":"))])
 
 
 def pairs_for_calibration(db, output, cells, days):
