@@ -1,23 +1,18 @@
-﻿"use strict";
+"use strict";
 
 const $ = id => document.getElementById(id);
-const data = HotspotData;
+const sensors = ["MODIS", "VIIRS"];
 const region = [-128, 23, -64, 51];
-const colors = {MODIS: "#ffac69", VIIRS: "#68dfed", Harmonized: "#c4b1ff"};
+const colors = {MODIS: "#ffac69", VIIRS: "#68dfed"};
 const number = new Intl.NumberFormat("en-US");
 const monthName = new Intl.DateTimeFormat("en-US", {month: "long", year: "numeric", timeZone: "UTC"});
 const pageSize = 20;
-const state = {
-  raw: new Map(), team: null, mode: "raw", sensor: "both", bounds: region, area: "Contiguous U.S. view",
-  rawSource: "", selected: "", page: 0, snapshot: null, follow: true, tab: "map", home: region
-};
-let revision = 0;
+const state = {backend: null, sensor: "both", selected: "", page: 0, tab: "map", points: []};
+let calendarRequest;
+let mapRequest;
 let basemapError = false;
-let visible = [];
-let reportDays = [];
-let moveTimer;
 let fitOnShow = false;
-let switching = false;
+let visible = [];
 
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
 const map = L.map("map", {
@@ -114,13 +109,11 @@ function asLeafletBounds(bounds) {
 }
 
 function activeBounds() {
-  return state.mode === "raw" ? state.bounds : state.team.bounds;
+  return state.backend?.bbox ?? region;
 }
 
 function fitArea() {
-  const bounds = state.mode === "raw" && state.follow ? state.home : activeBounds();
-  map.fitBounds(asLeafletBounds(bounds), {padding: [22, 22], maxZoom: 10, animate: false});
-  syncView();
+  map.fitBounds(asLeafletBounds(activeBounds()), {padding: [22, 22], maxZoom: 10, animate: false});
 }
 
 function element(tag, text = "", className = "") {
@@ -136,19 +129,82 @@ function status(text, error = false) {
 }
 
 function sourceLabel() {
-  return state.mode === "raw" ? state.rawSource : state.team.source + " · Method: " + state.team.method;
+  if (!state.backend) return "Backend data unavailable";
+  const labels = {MODIS_SP: "MODIS", VIIRS_SNPP_SP: "Suomi-NPP VIIRS"};
+  const sources = sensors.map(sensor => {
+    const source = state.backend.sources[sensor];
+    return labels[source] || source || sensor + " unavailable";
+  });
+  return "NASA FIRMS standard processing · " + sources.join(" + ");
 }
 
-function resetDates(keys) {
-  const days = Array.from(keys).sort();
-  const end = days.at(-1) || "";
-  const monthStart = end ? end.slice(0, 7) + "-01" : "";
-  const start = days[0] < monthStart && data.listDates(days[0], end).length > 31
-    ? monthStart : days[0] || "";
-  $("start").value = start;
-  $("end").value = end;
-  state.selected = "";
+async function fetchApi(path, signal) {
+  const response = await fetch(path, {signal, cache: "no-store"});
+  if (response.status === 503) throw new Error("The backend export is unavailable.");
+  if (!response.ok) throw new Error("The API returned HTTP " + response.status + ".");
+  return response.json();
+}
+
+async function loadBackend() {
+  calendarRequest?.abort();
+  mapRequest?.abort();
+  const request = new AbortController();
+  calendarRequest = request;
+  $("retry-data").disabled = true;
+  status("Loading the detection calendar…");
+  try {
+    const calendar = await fetchApi("/api/calendar", request.signal);
+    if (!Array.isArray(calendar.bbox) || calendar.bbox.length !== 4 ||
+        !calendar.bbox.every(Number.isFinite) || !calendar.data_version ||
+        !calendar.sources || !Array.isArray(calendar.rows) || !calendar.rows.length) {
+      throw new Error("The API calendar is missing dates, bounds, or sources.");
+    }
+    const days = new Map(calendar.rows.map(row => [row.date_utc, row.sensor_detections]));
+    if (request.signal.aborted) return;
+    state.backend = {...calendar, days, area: calendar.region === "northern-california-demo"
+      ? "Northern California demo" : calendar.region};
+    if (state.tab === "map") fitArea();
+    else fitOnShow = true;
+    await selectBackendDay([...days.keys()].sort()[0]);
+  } catch (error) {
+    if (!request.signal.aborted) {
+      status("Could not load the detection calendar. " + error.message, true);
+    }
+  } finally {
+    if (!request.signal.aborted) $("retry-data").disabled = false;
+  }
+}
+
+async function selectBackendDay(date) {
+  mapRequest?.abort();
+  const request = new AbortController();
+  mapRequest = request;
+  state.selected = date;
   state.page = 0;
+  state.points = [];
+  status("Loading backend detections for " + date + "…");
+  render();
+  try {
+    const collection = await fetchApi("/api/map?date=" + encodeURIComponent(date), request.signal);
+    if (request.signal.aborted) return;
+    if (collection.metadata?.data_version !== state.backend.data_version) {
+      throw new Error("The export changed. Reload the backend data to refresh it.");
+    }
+    if (collection.type !== "FeatureCollection" || !Array.isArray(collection.features) ||
+        collection.metadata.date_utc !== date) {
+      throw new Error("The API map is missing a valid daily GeoJSON export.");
+    }
+    state.points = collection.features.map(({geometry, properties}) => ({
+      lon: geometry.coordinates[0], lat: geometry.coordinates[1], date,
+      sensor: properties.sensor, time: properties.acquired_at_utc.slice(11, 16),
+      satellite: properties.platform, confidence: properties.confidence_raw, frp: properties.frp_mw
+    }));
+    status(sourceLabel());
+  } catch (error) {
+    if (request.signal.aborted) return;
+    status("Detection map unavailable. " + error.message, true);
+  }
+  render();
 }
 
 function fetchLocal(path) {
@@ -168,142 +224,13 @@ fetchLocal("assets/countries.geojson").then(response => response.json()).then(ge
   render();
 });
 
-async function loadSnapshot() {
-  state.snapshot ??= Promise.allSettled(data.sensors.map(async sensor => {
-    const response = await fetchLocal("assets/" + sensor.toLowerCase() + ".csv");
-    return data.parseFirms(await response.text(), sensor);
-  }));
-  const pending = state.snapshot;
-  const results = await pending;
-  const points = [];
-  const available = [];
-  let skipped = 0;
-  for (const [index, result] of results.entries()) {
-    if (result.status !== "fulfilled") continue;
-    for (const point of result.value.points) points.push(point);
-    available.push(data.sensors[index]);
-    skipped += result.value.skipped;
-  }
-  if (available.length < data.sensors.length && state.snapshot === pending) state.snapshot = null;
-  if (!available.length) {
-    throw new Error("The bundled snapshots could not load. Open a FIRMS CSV to explore detections.");
-  }
-  return {raw: data.indexRaw(points), available, skipped,
-    source: "NASA FIRMS · " + available.join(" + ") +
-      " · U.S. and Hawaii NRT snapshot downloaded Nov 14, 2026 (UTC)"};
-}
-
-async function restoreSnapshot() {
-  const attempt = ++revision;
-  status("Loading FIRMS snapshots…");
-  try {
-    const {raw, source, available, skipped} = await loadSnapshot();
-    if (attempt !== revision) return;
-    state.raw = raw;
-    state.rawSource = source;
-    state.sensor = "both";
-    state.bounds = region;
-    state.home = region;
-    state.follow = true;
-    state.area = "Contiguous U.S. view";
-    setMode("raw");
-    const warning = available.length < data.sensors.length ? " · One sensor snapshot could not load" : "";
-    status($("provenance").textContent + warning + skippedLabel(skipped), Boolean(warning));
-  } catch (error) {
-    if (attempt !== revision) return;
-    status(error.message, true);
-    render();
-  }
-}
-
-function skippedLabel(skipped) {
-  return skipped ? " · " + number.format(skipped) + " unusable rows skipped" : "";
-}
-
-function setMode(mode) {
-  state.mode = mode;
-  $("mode").value = mode;
-  resetDates((mode === "raw" ? state.raw : state.team.days).keys());
-  if (state.tab === "map") fitArea();
-  else fitOnShow = true;
-  render();
-}
-
-async function importFiles(files) {
-  if (!files.length) return;
-  const attempt = ++revision;
-  status("Reading selected files…");
-  try {
-    if (files.some(file => file.size > 20 * 1024 * 1024)) {
-      throw new Error("Each file must be under 20 MB. Export a smaller date range or area.");
-    }
-    if (files.length === 1 && /\.json$/i.test(files[0].name)) {
-      const team = data.parseTeam(await files[0].text());
-      if (attempt !== revision) return;
-      state.team = team;
-      $("team-option").disabled = false;
-      setMode("harmonized");
-      status("Loaded team export · " + files[0].name);
-      return;
-    }
-    if (files.length > 8 || !files.every(file => /\.csv$/i.test(file.name))) {
-      throw new Error("Choose up to eight FIRMS CSV files or one team JSON file.");
-    }
-    const points = [];
-    let skipped = 0;
-    for (const file of files) {
-      const parsed = data.parseFirms(await file.text());
-      for (const point of parsed.points) points.push(point);
-      skipped += parsed.skipped;
-    }
-    if (attempt !== revision) return;
-    if (!points.length) throw new Error("The CSV files have no detection rows.");
-    state.raw = data.indexRaw(points);
-    state.rawSource = "Imported FIRMS CSV · " + files.map(file => file.name).join(", ");
-    state.bounds = data.extent;
-    state.home = boundsForPoints(points);
-    state.follow = true;
-    state.area = "All imported areas";
-    state.sensor = "both";
-    setMode("raw");
-    status($("provenance").textContent + skippedLabel(skipped));
-  } catch (error) {
-    if (attempt === revision) status("Could not import data. " + error.message, true);
-  }
-}
-
-function boundsForPoints(points) {
-  const bounds = [180, 85, -180, -85];
-  for (const {lat, lon} of points) {
-    bounds[0] = Math.min(bounds[0], lon);
-    bounds[1] = Math.min(bounds[1], lat);
-    bounds[2] = Math.max(bounds[2], lon);
-    bounds[3] = Math.max(bounds[3], lat);
-  }
-  const padded = [Math.max(-180, bounds[0] - 0.2), Math.max(-85, bounds[1] - 0.2),
-    Math.min(180, bounds[2] + 0.2), Math.min(85, bounds[3] + 0.2)];
-  return data.validBounds(padded) ? padded : data.extent;
-}
-
 function selectedSensors() {
-  return state.sensor === "both" ? data.sensors : [state.sensor];
+  return state.sensor === "both" ? sensors : [state.sensor];
 }
 
-function rawDay(date) {
-  const records = state.raw.get(date);
-  const points = [];
-  const counts = selectedSensors().map(sensor => {
-    if (!records?.[sensor].length) return {sensor, count: null};
-    const inArea = records[sensor].filter(point => data.contains(state.bounds, point));
-    for (const point of inArea) points.push(point);
-    return {sensor, count: inArea.length};
-  });
-  return {date, counts, points};
-}
-
-function teamDay(date) {
-  const day = state.team.days.get(date);
-  return {date, counts: [{sensor: "Harmonized", count: day?.count ?? null}], points: day?.points ?? []};
+function backendDay(date) {
+  const counts = state.backend.days.get(date);
+  return {date, counts: selectedSensors().map(sensor => ({sensor, count: counts[sensor]}))};
 }
 
 function calendarCell({date, counts}) {
@@ -313,7 +240,8 @@ function calendarCell({date, counts}) {
   cell.dataset.date = date;
   cell.setAttribute("aria-pressed", String(date === state.selected));
   const description = counts.map(({sensor, count}) =>
-    sensor + ": " + (count === null ? "coverage unknown" : count === 0 ? "no records" : number.format(count)));
+    sensor + ": " + (count === null ? "source unavailable"
+      : count === 0 ? "no records" : number.format(count)));
   cell.setAttribute("aria-label", date + " UTC. " + description.join(". "));
   cell.title = description.join(" · ");
   cell.append(element("strong", String(Number(date.slice(8)))));
@@ -348,7 +276,7 @@ function renderCalendar(days) {
     }
     grid.append(calendarCell(day));
   }
-  if (!days.length) content.append(element("p", "Choose a valid range of up to 366 days.", "subtle"));
+  if (!days.length) content.append(element("p", "The calendar will appear when the backend provides its exported dates.", "subtle"));
   calendar.replaceChildren(content);
   calendar.scrollTop = scroll;
 }
@@ -377,12 +305,11 @@ function renderMap(points) {
   pointLayer.clearLayers();
   focusLayer.clearLayers();
   boundary.setBounds(asLeafletBounds(activeBounds()));
-  boundary.setStyle({opacity: state.mode === "raw" && state.follow ? 0 : 0.85});
+  boundary.setStyle({opacity: state.backend ? 0.85 : 0});
   for (const point of points) mapPoint(point).addTo(pointLayer);
   const legend = $("legend");
   legend.replaceChildren();
-  const sensors = state.mode === "raw" ? selectedSensors() : ["Harmonized"];
-  for (const sensor of sensors) {
+  for (const sensor of selectedSensors()) {
     const label = element("span", "", sensor.toLowerCase());
     const dot = element("i", "", "dot");
     dot.setAttribute("aria-hidden", "true");
@@ -398,9 +325,8 @@ function renderDetails() {
   $("next").disabled = state.page + 1 >= pages;
   $("page").textContent = pages ? "Page " + (state.page + 1) + " of " + number.format(pages) : "";
   if (!pages) {
-    target.replaceChildren(element("p", state.mode === "raw"
-      ? "No detections match the current filters."
-      : "The team export has no map points for this selection. See the calendar for the reported counts."));
+    target.replaceChildren(element("p", state.backend
+      ? "No detections to display for this selection." : "Detection data will appear when the backend is connected."));
     return;
   }
   const table = element("table");
@@ -423,8 +349,6 @@ function renderDetails() {
     button.addEventListener("click", () => {
       showTab("map");
       map.panInside([point.lat, point.lon], {padding: [22, 22], animate: false});
-      clearTimeout(moveTimer);
-      syncView();
       focusLayer.clearLayers();
       mapPoint(point, true).addTo(focusLayer).openPopup();
       $("map").focus({preventScroll: true});
@@ -436,52 +360,26 @@ function renderDetails() {
 }
 
 function render() {
-  const dates = data.listDates($("start").value, $("end").value);
-  const valid = dates.length > 0 && dates.length <= 366;
-  const raw = state.mode === "raw";
-  const days = valid ? dates.map(raw ? rawDay : teamDay) : [];
-  reportDays = days;
-  if (!days.some(day => day.date === state.selected)) state.selected = "";
-  visible = days.filter(day => !state.selected || day.date === state.selected).flatMap(day => day.points);
+  const days = state.backend ? [...state.backend.days.keys()].sort().map(backendDay) : [];
+  const sensorsShown = selectedSensors();
+  visible = state.points.filter(point => sensorsShown.includes(point.sensor));
   state.page = Math.min(state.page, Math.max(0, Math.ceil(visible.length / pageSize) - 1));
   const bounds = activeBounds().map(value => value.toFixed(2)).join(", ");
-  $("area-name").textContent = raw ? (state.follow ? "Following map view" : state.area) : state.team.area;
-  $("use-view").textContent = state.follow ? "Lock area" : "Follow map";
-  $("area-name").title = "W, S, E, N: " + bounds;
-  $("sensor-control").hidden = !raw;
-  $("edit-area").disabled = !raw;
-  $("use-view").disabled = !raw;
-  $("clear-day").hidden = !state.selected;
-  $("detail-title").textContent = raw ? "Detections" : "Harmonized map points";
-  $("calendar-summary").textContent = valid ? (raw
-    ? "Raw detections per day · 0 no records · ? coverage unknown"
-    : "Team counts per day · ? coverage unknown · Area fixed by export")
-    : "Select up to 366 consecutive UTC dates.";
-  const pointCount = number.format(visible.length) + (raw ? " raw detections" : " exported points");
-  $("list-summary").textContent = pointCount;
-  const scopedDays = state.selected ? days.filter(day => day.date === state.selected) : days;
-  const counts = raw ? selectedSensors().map(sensor => {
-    const results = scopedDays.map(day => day.counts.find(item => item.sensor === sensor)?.count);
-    const known = results.filter(count => count != null);
-    const total = known.reduce((sum, count) => sum + count, 0);
-    const partial = known.length < results.length ? " (partial coverage)" : "";
-    return sensor + " " + (known.length ? number.format(total) + partial : "unknown");
-  }).join(" · ") : pointCount;
-  const scope = (state.selected ? state.selected + " UTC · " : "") + counts;
+  $("area-name").textContent = state.backend?.area || "Study area pending";
+  $("area-name").title = state.backend ? "W, S, E, N: " + bounds : "";
+  $("fit-area").disabled = !state.backend;
+  const selected = state.backend && backendDay(state.selected);
+  const counts = selected?.counts.map(({sensor, count}) =>
+    sensor + " " + (count === null ? "unavailable" : number.format(count))).join(" · ");
+  const scope = selected ? state.selected + " UTC · " + counts : "No backend data loaded";
   $("map-scope").textContent = scope;
-  $("list-summary").textContent = raw ? scope + " · " + pointCount : scope;
+  $("list-summary").textContent = scope;
   mapHelp();
-  const records = Array.from((raw ? state.raw : state.team.days).keys()).sort();
-  const datesText = records.length ? " · Record dates (UTC) " + records[0] + " to " + records.at(-1) : "";
-  $("provenance").textContent = (sourceLabel() || "No dataset loaded") + datesText;
-  $("method").textContent = raw
-    ? "Method: count FIRMS observation rows in the selected area and UTC dates, separately for each instrument."
-    : "Method: " + state.team.method + ". The calendar uses the daily totals supplied by the team export.";
-  $("coverage").textContent = (raw ? "Current study bounds" : "Coverage fixed by team export") +
-    " (west, south, east, north): " + bounds + ". " +
-    (raw ? "Counts reflect only the loaded files." : "Missing dates and null counts are unknown. Map points may be a subset.");
-  $("download-csv").disabled = raw ? !visible.length : !reportDays.length;
-  $("download-csv").textContent = raw ? "Download filtered CSV" : "Download daily counts CSV";
+  $("provenance").textContent = sourceLabel();
+  $("coverage").textContent = state.backend
+    ? "Study bounds (west, south, east, north) " + bounds + ". Satellite observation coverage is unknown."
+    : "";
+  $("download-csv").disabled = !visible.length;
   for (const button of document.querySelectorAll("[data-sensor]")) {
     button.setAttribute("aria-pressed", String(state.sensor === button.dataset.sensor));
   }
@@ -494,22 +392,17 @@ function render() {
 function csvCell(value) {
   if (value == null) return "";
   let text = String(value);
-  // Imported fields can contain spreadsheet formulas. Keep those fields literal.
+  // Source fields can contain spreadsheet formulas. Keep those fields literal.
   if (typeof value === "string" && /^[\s]*[=+\-@]|^[\t\r\n]/.test(text)) text = "'" + text;
   return /[",\r\n]/.test(text) ? '"' + text.replaceAll('"', '""') + '"' : text;
 }
 
 function exportCsv() {
-  const raw = state.mode === "raw";
-  const rows = raw
-    ? [["date_utc", "time_utc", "sensor", "satellite", "latitude", "longitude", "confidence", "frp_mw"],
-      ...visible.map(point => [point.date, point.time, point.sensor, point.satellite, point.lat, point.lon,
-        point.confidence, point.frp])]
-    : [["date_utc", "harmonized_count", "coverage_status", "area"],
-      ...reportDays.map(({date, counts}) => {
-        const [{count}] = counts;
-        return [date, count, count === null ? "unknown" : "reported", state.team.area];
-      })];
+  const rows = [
+    ["date_utc", "time_utc", "sensor", "satellite", "latitude", "longitude", "confidence", "frp_mw"],
+    ...visible.map(point => [point.date, point.time, point.sensor, point.satellite, point.lat, point.lon,
+      point.confidence, point.frp])
+  ];
   return rows.map(row => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
 }
 
@@ -517,66 +410,15 @@ $("download-csv").addEventListener("click", () => {
   const url = URL.createObjectURL(new Blob([exportCsv()], {type: "text/csv;charset=utf-8"}));
   const link = element("a");
   link.href = url;
-  link.download = state.mode === "raw" ? "firms-filtered-detections.csv" : "harmonized-daily-counts.csv";
+  link.download = "detections.csv";
   document.body.append(link);
   link.click();
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 
-function applyArea(bounds, name, fit) {
-  state.follow = false;
-  state.bounds = bounds;
-  state.area = name;
-  state.page = 0;
-  render();
-  if (fit && state.tab === "map") fitArea();
-  else if (fit) fitOnShow = true;
-}
-
-$("mode").addEventListener("change", event => {
-  setMode(event.target.value);
-  status($("provenance").textContent);
-});
-$("upload").addEventListener("change", event => {
-  const files = Array.from(event.target.files);
-  event.target.value = "";
-  importFiles(files);
-});
-$("restore").addEventListener("click", restoreSnapshot);
+$("retry-data").addEventListener("click", loadBackend);
 $("fit-area").addEventListener("click", fitArea);
-$("use-view").addEventListener("click", () => {
-  if (state.tab !== "map") showTab("map");
-  if (state.follow) {
-    const bounds = viewportBounds();
-    if (bounds) applyArea(bounds, "Locked map view", false);
-  } else {
-    state.follow = true;
-    if (!syncView()) render();
-  }
-});
-$("edit-area").addEventListener("click", () => {
-  const fields = $("bounds-form").elements;
-  ["west", "south", "east", "north"].forEach((name, index) => {
-    fields[name].value = state.bounds[index];
-  });
-  $("bounds-error").textContent = "";
-  $("bounds-dialog").showModal();
-});
-$("cancel-bounds").addEventListener("click", () => $("bounds-dialog").close());
-$("bounds-form").addEventListener("submit", event => {
-  event.preventDefault();
-  const bounds = ["west", "south", "east", "north"].map(name => event.target.elements[name].valueAsNumber);
-  if (!data.validBounds(bounds)) {
-    $("bounds-error").textContent = "West must be less than east, and south less than north.";
-    return;
-  }
-  $("bounds-dialog").close();
-  applyArea(bounds, "Custom bounds", true);
-});
-for (const id of ["start", "end"]) {
-  $(id).addEventListener("change", () => { state.page = 0; render(); });
-}
 for (const button of document.querySelectorAll("[data-sensor]")) {
   button.addEventListener("click", () => {
     state.sensor = button.dataset.sensor;
@@ -587,17 +429,8 @@ for (const button of document.querySelectorAll("[data-sensor]")) {
 $("calendar").addEventListener("click", event => {
   const date = event.target.closest("button[data-date]")?.dataset.date;
   if (!date) return;
-  state.selected = state.selected === date ? "" : date;
-  state.page = 0;
-  render();
+  selectBackendDay(date);
   $("calendar").querySelector('[data-date="' + date + '"]')?.focus({preventScroll: true});
-});
-$("clear-day").addEventListener("click", () => {
-  const previous = state.selected;
-  state.selected = "";
-  state.page = 0;
-  render();
-  $("calendar").querySelector('[data-date="' + previous + '"]')?.focus();
 });
 $("previous").addEventListener("click", () => { state.page--; renderDetails(); });
 $("next").addEventListener("click", () => { state.page++; renderDetails(); });
@@ -615,14 +448,12 @@ function showTab(tab, focusTab = false) {
     }
     $("explorer-filters").hidden = tab === "compare";
     if (tab === "map") {
-      switching = true;
       map.invalidateSize({pan: true});
       if (fitOnShow) {
         fitOnShow = false;
         fitArea();
       }
-      switching = false;
-      if (!syncView()) renderMap(visible);
+      renderMap(visible);
     } else {
       setWheel(false);
     }
@@ -631,27 +462,9 @@ function showTab(tab, focusTab = false) {
   if (focusTab) $(tab + "-tab").focus();
 }
 
-function viewportBounds() {
-  const box = map.getBounds();
-  const bounds = [Math.max(-180, box.getWest()), Math.max(-85, box.getSouth()),
-    Math.min(180, box.getEast()), Math.min(85, box.getNorth())];
-  return data.validBounds(bounds) ? bounds : null;
-}
-
-function syncView() {
-  if (switching || state.tab !== "map" || state.mode !== "raw" || !state.follow) return false;
-  const next = viewportBounds();
-  if (!next || next.every((value, index) => Math.abs(value - state.bounds[index]) < 0.000001)) return false;
-  state.bounds = next;
-  state.page = 0;
-  render();
-  return true;
-}
-
 function resizeMap() {
   if (state.tab !== "map") return;
   map.invalidateSize({pan: true});
-  syncView();
 }
 
 function setWheel(active) {
@@ -689,14 +502,9 @@ document.addEventListener("pointerdown", event => {
 $("map").addEventListener("keydown", event => {
   if (event.key === "Escape") setWheel(false);
 });
-map.on("moveend", () => {
-  mapHelp();
-  clearTimeout(moveTimer);
-  moveTimer = setTimeout(syncView, 90);
-});
+map.on("moveend", mapHelp);
 new ResizeObserver(resizeMap).observe($("map"));
 
 setBasemap("satellite");
 render();
-restoreSnapshot();
-
+loadBackend();

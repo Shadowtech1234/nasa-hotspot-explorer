@@ -74,7 +74,6 @@ h1 { font: 500 clamp(2rem, 4vw, 3.1rem)/1.03 "Instrument Serif", Georgia, serif;
 .dot { width: .65em; height: .65em; border-radius: 50%; background: currentColor; }
 .modis { color: var(--modis); }
 .viirs { color: var(--viirs); }
-.harmonized { color: var(--harmonized); }
 .calendar-panel, .detail-panel, .sources { margin-top: 1.1rem; padding-top: .85rem; border-top: 1px solid var(--line); }
 .calendar { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); align-items: start; gap: .85rem 1.2rem; margin-top: .65rem; max-height: 560px; overflow: auto; }
 .month { min-width: 0; }
@@ -218,104 +217,38 @@ dialog { border-radius: 22px; box-shadow: var(--lift); }
   #map .leaflet-control-zoom a { width: 44px; height: 44px; line-height: 44px; }
 }
 
-.compare-intro, .compare-header {
+.compare-header {
   display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
   gap: .85rem; margin-bottom: .85rem;
 }
-.compare-intro { padding: .45rem 0 .3rem; }
-.compare-intro h2 { font-size: clamp(1.5rem, 3vw, 2.35rem); letter-spacing: -.045em; }
-.compare-intro p, .compare-header p, .compare-note { color: var(--muted); font-size: .86rem; }
+.compare-header p, .compare-note { color: var(--muted); font-size: .86rem; }
 .compare-card {
   border: 1px solid var(--rim); border-radius: 22px; background: var(--surface);
   padding: clamp(.65rem, 2vw, 1.2rem); box-shadow: var(--lift); margin-bottom: 1rem;
 }
 .compare-header .actions { align-items: flex-end; }
 .compare-header .filter { font-size: .8rem; color: var(--muted); }
-.sensor-metrics, .season-metrics { display: grid; gap: .5rem; margin: .6rem 0; }
+.sensor-metrics { display: grid; gap: .5rem; margin: .6rem 0; }
 .sensor-metrics { grid-template-columns: repeat(2, minmax(0,1fr)); }
-.season-metrics { grid-template-columns: repeat(auto-fit, minmax(135px, 1fr)); }
-.sensor-metric, .season-metric {
+.sensor-metric {
   display: grid; padding: .48rem .7rem; background: #f4f6f2; border-radius: 12px;
   overflow-wrap: anywhere;
 }
-.sensor-metric span, .season-metric span { font-size: .78rem; }
-.sensor-metric strong, .season-metric strong { font-size: clamp(1.05rem, 3vw, 1.6rem); }
+.sensor-metric span { font-size: .78rem; }
+.sensor-metric strong { font-size: clamp(1.05rem, 3vw, 1.6rem); }
 .compare-maps { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
 .compare-map { position: relative; z-index: 0; height: clamp(250px, 45vh, 470px); border-radius: 15px; background: #203a41; }
 .compare-map .leaflet-control-attribution { font-size: 10px; }
 .compare-note { margin-top: .42rem; }
 #compare-mobile { display: none; }
-#season-status { padding-block: .2rem .5rem; overflow-wrap: anywhere; }
-.season-chart { display: grid; gap: .37rem; padding: .75rem 0; }
-.season-bar { display: grid; grid-template-columns: 7rem 1fr minmax(3rem, auto); align-items: center; gap: .5rem; font-size: .8rem; }
-.season-bar strong { text-align: end; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.season-track { height: .58rem; background: #edf1eb; border-radius: 999px; overflow: hidden; }
-.season-track div { height: 100%; background: #819d88; border-radius: 999px; }
-.season-bar.is-current .season-track div { background: var(--accent); }
-#season-table, .compare-evidence { margin: .75rem 0; }
-#season-values { overflow-x: auto; }
-.compare-evidence p { margin: .35rem 0; overflow-wrap: anywhere; }
-.compare-days { display: flex; flex-wrap: wrap; gap: .35rem; margin: .65rem 0; }
-.compare-days button { font-variant-numeric: tabular-nums; font-size: .79rem; }
 @media (max-width: 700px) {
   #compare-mobile { display: flex; }
   .compare-maps { grid-template-columns: 1fr; }
   .compare-maps[data-active="MODIS"] #compare-map-viirs,
   .compare-maps[data-active="VIIRS"] #compare-map-modis { display: none; }
   .tabs button { padding-inline: clamp(.38rem, 2.3vw, .9rem); }
-  .season-bar { grid-template-columns: 5rem 1fr minmax(2.5rem, auto); }
 }
 @media (pointer: coarse) {
   .compare-map .leaflet-control-zoom a { width: 44px; height: 44px; line-height: 44px; }
-  .compare-days button, #compare-mobile button { min-height: 44px; }
-}
-@media print {
-  body.printing-brief > :not(#print-report) { display: none !important; }
-  body.printing-brief #print-report[hidden] {
-    display: block !important; color: #000; background: #fff;
-    padding: .5cm; font: 11pt/1.4 system-ui, sans-serif;
-  }
-  #print-report h1 { margin-bottom: .5em; font-size: 21pt; }
-  #print-report p { margin: .48em 0; overflow-wrap: anywhere; }
-}
-
-.handoff-scene {
-  position: relative; isolation: isolate; display: grid; align-items: end; min-height: 355px;
-  overflow: hidden; border-radius: 17px; background: #172e36;
-}
-#handoff-map { position: absolute; inset: 0; z-index: 0; background: #172e36; }
-.handoff-frame {
-  position: relative; z-index: 1; width: min(34rem, calc(100% - 1.5rem)); margin: .75rem;
-  padding: clamp(.75rem, 2vw, 1.15rem); border: 1px solid #ffffff24; border-radius: 14px;
-  color: #f6faf7; background: rgb(15 32 30 / .94);
-}
-#handoff-date { color: #bfdbcc; font-size: .77rem; font-variant-numeric: tabular-nums; }
-#handoff-frame-title { margin: .24rem 0 .6rem; font-size: clamp(1.15rem, 3vw, 1.7rem); }
-#handoff-caption { margin-top: .6rem; font-size: .85rem; }
-.handoff-count { display: inline-grid; margin: 0 .65rem .2rem 0; gap: .1rem; color: #f6faf7; }
-.handoff-count span, .handoff-unit { font-size: .78rem; }
-.handoff-count strong { font-size: clamp(1rem, 3vw, 1.45rem); font-variant-numeric: tabular-nums; }
-.handoff-count.modis span { color: #ffc08b; }
-.handoff-count.viirs span { color: #a1e9f2; }
-.handoff-bar {
-  display: grid; grid-template-columns: 3rem minmax(0, 1fr) minmax(2rem, auto);
-  gap: .4rem; align-items: center; margin-top: .22rem; font-size: .8rem;
-}
-.handoff-bar strong { text-align: end; font-variant-numeric: tabular-nums; }
-.handoff-track { height: .42rem; background: #ffffff30; border-radius: 999px; overflow: hidden; }
-.handoff-track span { display: block; height: 100%; background: #a7e1bc; border-radius: inherit; }
-.handoff-timeline { display: flex; gap: .4rem; flex-wrap: wrap; margin: .65rem 0; }
-.handoff-timeline span {
-  padding: .3rem .65rem; border-radius: 999px; background: #eef3ed;
-  color: var(--muted); font-size: .75rem;
-}
-.handoff-timeline .is-current { background: #215743; color: #fff; }
-#handoff-status { margin: 0 0 .65rem; color: var(--muted); }
-#handoff-evidence { margin-top: .75rem; }
-#handoff-sources p { margin: .35rem 0; overflow-wrap: anywhere; }
-@media (max-width: 700px) {
-  .handoff-scene { min-height: 0; grid-template-rows: 195px auto; align-items: stretch; }
-  #handoff-map { position: relative; inset: auto; }
-  .handoff-frame { min-height: 185px; }
-  #launch-handoff { min-height: 44px; }
+  #compare-mobile button { min-height: 44px; }
 }

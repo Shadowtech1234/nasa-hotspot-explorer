@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -8,10 +8,8 @@
   <link rel="stylesheet" href="assets/leaflet.css">
   <link rel="stylesheet" href="styles.css">
   <script defer src="assets/leaflet.js"></script>
-  <script defer src="data.js"></script>
   <script defer src="app.js"></script>
   <script defer src="compare.js"></script>
-  <script defer src="handoff.js"></script>
 </head>
 <body>
   <a class="skip" href="#workspace">Skip to explorer</a>
@@ -29,24 +27,20 @@
       </div>
     </div>
     <section id="explorer-filters" class="filters" aria-label="Explorer filters">
-      <div class="filter"><span class="caption">Dataset</span><select id="mode" aria-label="Dataset"><option value="raw">FIRMS raw detections</option><option value="harmonized" id="team-option" disabled>Harmonized activity</option></select></div>
       <div class="filter" id="sensor-control"><span class="caption">Sensor</span><div class="segments" role="group" aria-label="Sensor">
         <button type="button" data-sensor="both" aria-pressed="true">Both</button><button type="button" data-sensor="MODIS" aria-pressed="false">MODIS</button><button type="button" data-sensor="VIIRS" aria-pressed="false">VIIRS</button>
       </div></div>
-      <div class="dates">
-        <label class="filter"><span class="caption">From (UTC)</span><input id="start" type="date"></label>
-        <label class="filter"><span class="caption">To (UTC)</span><input id="end" type="date"></label>
-      </div>
-      <div class="filter"><span class="caption">Study area</span><div class="area-controls"><button id="use-view" type="button">Lock area</button><button id="edit-area" type="button">Edit bounds</button></div><span id="area-name" class="subtle"></span></div>
+      <div class="filter"><span class="caption">Study area</span><span id="area-name" class="subtle"></span></div>
     </section>
-    <p id="status" class="status" role="status">Loading FIRMS snapshots…</p>
+    <div class="actions">
+      <p id="status" class="status" role="status">Loading the detection calendar…</p>
+      <button id="retry-data" type="button">Reload data</button>
+    </div>
     <section id="map-panel" role="tabpanel" aria-labelledby="map-tab">
       <section class="map-panel" aria-labelledby="map-title">
         <div class="panel-heading map-heading">
           <div><h2 id="map-title">Hotspot map</h2><p id="map-scope"></p></div>
           <div class="map-tools">
-            <button id="launch-handoff" class="primary" type="button">Play the Sensor Handoff</button>
-            <button id="launch-compare" type="button">Try the demo</button>
             <label class="basemap-label">Basemap <select id="basemap"><option value="satellite">Satellite</option><option value="simple">Simple</option></select></label>
             <button id="fit-area" type="button">Fit area</button>
             <button id="resize-map" type="button" aria-pressed="false">Larger map</button>
@@ -56,46 +50,15 @@
         <div class="map-footer"><div id="legend" class="legend"></div><p id="map-help" class="map-help"></p></div>
       </section>
       <section class="calendar-panel" aria-labelledby="calendar-title">
-        <div class="panel-heading"><div><h2 id="calendar-title">Burning activity calendar</h2><p id="calendar-summary"></p></div><button id="clear-day" type="button" hidden>Clear day</button></div>
+        <div class="panel-heading"><div><h2 id="calendar-title">Burning activity calendar</h2><p>Exported UTC dates · 0 no detections · ? source unavailable</p></div></div>
         <div id="calendar" class="calendar"></div>
       </section>
     </section>
     <section id="compare-panel" role="tabpanel" aria-labelledby="compare-tab" hidden>
-      <div class="compare-intro">
-        <div><h2>Was this week unusual?</h2><p>Compare the sensors, then put a week of burning activity in historical context.</p></div>
-        <button id="compare-demo" class="primary" type="button">Try the demo</button>
-      </div>
-      <section id="handoff" class="compare-card handoff" aria-labelledby="handoff-title">
-        <div class="compare-header">
-          <div><h3 id="handoff-title" tabindex="-1">The Sensor Handoff</h3><p>Three snapshots. Two instruments. One comparable measure.</p></div>
-          <button id="handoff-play" class="primary" type="button" disabled>Play sequence</button>
-        </div>
-        <p id="handoff-status" role="status"></p>
-        <div id="handoff-view" hidden>
-          <div class="handoff-scene">
-            <div id="handoff-map" aria-hidden="true"></div>
-            <div class="handoff-frame">
-              <p id="handoff-date"></p>
-              <h4 id="handoff-frame-title"></h4>
-              <div id="handoff-metrics"></div>
-              <p id="handoff-caption" aria-live="polite"></p>
-            </div>
-          </div>
-          <p id="handoff-map-note" class="compare-note"></p>
-          <div id="handoff-timeline" class="handoff-timeline" aria-label="Dated snapshots"></div>
-          <div class="actions handoff-controls">
-            <button id="handoff-pause" type="button">Pause</button>
-            <button id="handoff-skip" type="button">Skip to result</button>
-            <button id="handoff-replay" type="button" hidden>Replay</button>
-          </div>
-          <details id="handoff-evidence"><summary>See the evidence</summary><div id="handoff-sources"></div></details>
-        </div>
-        <button id="handoff-import" type="button" hidden>Open data imports</button>
-      </section>
       <section class="compare-card" aria-labelledby="sensor-title">
         <div class="compare-header">
           <div><h3 id="sensor-title">One area, two sensors</h3><p id="sensor-scope"></p></div>
-          <div class="actions"><label class="filter">Observation date (UTC)<input id="compare-date" type="date"></label>
+          <div class="actions"><label class="filter">Observation date (UTC)<select id="compare-date" disabled></select></label>
             <button id="compare-fit" type="button">Fit study area</button></div>
         </div>
         <div id="compare-mobile" class="segments" role="group" aria-label="Sensor shown on map">
@@ -113,31 +76,10 @@
         <p class="compare-note" id="compare-visual-note"></p>
         <p class="compare-note">Resolution, overpass timing, and detection methods differ. Both counts describe observations, which can include repeat views of the same fire.</p>
       </section>
-      <section class="compare-card" aria-labelledby="season-title">
-        <div class="compare-header">
-          <div><h3 id="season-title">This week in context</h3><p id="season-scope"></p></div>
-          <div class="actions"><label class="filter">Week ending (UTC)<input id="season-end" type="date"></label>
-            <button id="open-team-import" type="button">Open data imports</button></div>
-        </div>
-        <p id="season-status" role="status"></p>
-        <div id="season-report" hidden>
-          <div id="season-metrics" class="season-metrics"></div>
-          <div id="season-chart" class="season-chart" aria-hidden="true"></div>
-          <details id="season-table"><summary>Comparison values</summary><div id="season-values"></div></details>
-          <div class="compare-days" id="season-days" aria-label="Inspect days on the map"></div>
-          <div class="actions"><button id="print-briefing" type="button">Print briefing</button>
-            <button id="download-comparison" type="button">Download comparison CSV</button></div>
-        </div>
-        <details class="compare-evidence"><summary>Evidence and coverage</summary><div id="season-evidence"></div></details>
-      </section>
     </section>
     <section id="detections-panel" role="tabpanel" aria-labelledby="detections-tab" hidden>
       <section class="data-controls" aria-labelledby="data-title">
         <div><h2 id="data-title">Data source</h2><p id="provenance"></p></div>
-        <div class="actions">
-          <button id="restore" type="button">Restore snapshot</button>
-          <label class="upload">Open CSV / JSON <input id="upload" type="file" aria-label="Open FIRMS CSV or team JSON files" accept=".csv,.json,text/csv,application/json" multiple></label>
-        </div>
       </section>
       <section class="detail-panel" aria-labelledby="detail-title">
         <div class="panel-heading"><div><h2 id="detail-title">Detections</h2><p id="list-summary"></p></div><button id="download-csv" type="button" disabled>Download filtered CSV</button></div>
@@ -146,28 +88,12 @@
       </section>
       <details class="sources">
       <summary>Data &amp; methods</summary>
-      <p id="method"></p>
       <p id="coverage"></p>
       <p>Raw counts are satellite observations of thermal anomalies. Repeated observations may refer to the same fire. MODIS and VIIRS have different resolutions and overpass times. Clouds, smoke, and gaps between overpasses can hide activity.</p>
-      <p>“No records” means the loaded file has records for that sensor and day, but none match this area. “Unknown” means the available data cannot establish an observation count. Neither label establishes fire absence.</p>
+      <p>A zero means the available source reported no detections in the study area on that day. A question mark means the source is unavailable.</p>
       <p><a href="https://firms.modaps.eosdis.nasa.gov/download/">NASA FIRMS archive</a> · <a href="https://forum.earthdata.nasa.gov/viewtopic.php?t=5178">NASA detection guidance</a> · <a href="https://www.naturalearthdata.com/">Natural Earth basemap</a></p>
     </details>
     </section>
   </main>
-  <section id="print-report" hidden aria-label="Seasonal comparison briefing"></section>
-  <dialog id="bounds-dialog" aria-labelledby="bounds-title">
-    <form id="bounds-form">
-      <h2 id="bounds-title">Edit area bounds</h2>
-      <p>Enter decimal coordinates. Use a negative value for west or south.</p>
-      <div class="bounds-fields">
-        <label>West <input name="west" type="number" min="-180" max="180" step="any" required></label>
-        <label>South <input name="south" type="number" min="-85" max="85" step="any" required></label>
-        <label>East <input name="east" type="number" min="-180" max="180" step="any" required></label>
-        <label>North <input name="north" type="number" min="-85" max="85" step="any" required></label>
-      </div>
-      <p id="bounds-error" role="alert"></p>
-      <div class="actions"><button type="button" id="cancel-bounds">Cancel</button><button type="submit" class="primary">Apply area</button></div>
-    </form>
-  </dialog>
 </body>
 </html>
