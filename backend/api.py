@@ -3,12 +3,17 @@
 from datetime import date
 from enum import Enum
 import json
+from pathlib import Path
 import re
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from .aggregate import OUTPUT_DIR
+
+
+FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
 
 
 # FastAPI uses this enum to validate the optional sensor query parameter.
@@ -54,6 +59,10 @@ def create_app(output_dir=OUTPUT_DIR):
             ]
             collection["metadata"]["selected_sensor"] = sensor.value
         return JSONResponse(collection, media_type="application/geo+json")
+
+    # Register this last so the root mount cannot intercept API or docs routes.
+    if (FRONTEND_DIR / "index.html").is_file():
+        app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 
     return app
 
