@@ -47,7 +47,7 @@ def csv_bytes(fields, rows):
     return buffer.getvalue().encode("utf-8")
 
 
-def build(manifests, output, initial_bounds=None):
+def build(manifests, output, initial_bounds=None, archive_output=None, regions_file=None):
     coverage = []
     names = {}
     partitions = {}
@@ -125,7 +125,15 @@ def build(manifests, output, initial_bounds=None):
     ]}
     catalog = {"initial_bbox": initial, "start": start, "end_exclusive": end,
                "sources": names, "coverage": coverage, "packets": packets}
-    release = hashlib.sha256(json.dumps([catalog, summary], sort_keys=True).encode()).hexdigest()
+    if archive_output is not None:
+        from .package_monthly import monthly_files
+
+        monthly, files = monthly_files(archive_output, regions_file)
+        catalog["monthly"] = monthly
+    else:
+        files = {}
+    checksums = {name: hashlib.sha256(payload).hexdigest() for name, payload in files.items()}
+    release = hashlib.sha256(json.dumps([catalog, summary, checksums], sort_keys=True).encode()).hexdigest()
     catalog.update({"version": release, "overview": f"{release}/overview.json"})
     release_dir = output / release
     release_dir.mkdir(parents=True, exist_ok=True)
@@ -133,6 +141,12 @@ def build(manifests, output, initial_bounds=None):
         filename = packet["url"]
         (release_dir / filename).write_bytes(payloads[filename])
         packet["url"] = f"{release}/{filename}"
+    for name, payload in files.items():
+        path = release_dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+    for region in catalog.get("monthly", []):
+        region["calendar"] = f"{release}/{region['calendar']}"
     write_json(release_dir / "overview.json", summary)
     write_json(output / "index.json", catalog)
     return catalog
@@ -143,9 +157,14 @@ def main():
     parser.add_argument("--manifest", action="append", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=Path("frontend/data"))
     parser.add_argument("--initial-bounds", nargs=4, type=float, metavar=("W", "S", "E", "N"))
+    parser.add_argument("--archive-output", type=Path, help="Local archive output to publish monthly results from")
+    parser.add_argument("--regions", type=Path, help="Optional JSON list of published monthly regions")
     args = parser.parse_args()
+    if args.regions and not args.archive_output:
+        parser.error("--regions requires --archive-output")
     try:
-        catalog = build(args.manifest, args.output, args.initial_bounds)
+        catalog = build(args.manifest, args.output, args.initial_bounds,
+                        args.archive_output, args.regions)
     except (OSError, KeyError, TypeError, ValueError, csv.Error) as error:
         parser.exit(1, f"Could not package the dataset: {error}\n")
     packets = catalog["packets"]

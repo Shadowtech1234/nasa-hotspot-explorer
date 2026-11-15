@@ -10,6 +10,7 @@ const monthName = new Intl.DateTimeFormat("en-US", {month: "long", year: "numeri
 const pageSize = 20;
 const state = {result: null, sensor: "both", selected: "", page: 0, tab: "map", points: []};
 let catalog;
+const isMonthly = () => $("map-mode").value === "monthly";
 let catalogRequest;
 let selectionRequest;
 let selectionTimer;
@@ -131,7 +132,14 @@ function activeBounds() {
 }
 
 function fitArea() {
-  map.fitBounds(asLeafletBounds(fixedBounds ?? catalog.initial_bbox), {
+  const monthlyBounds = isMonthly() ? monthlyActivity.bounds() : null;
+  const bbox = monthlyBounds ?? fixedBounds ?? catalog.initial_bbox;
+  // The existing world map shows each side of the antimeridian separately.
+  if (bbox[0] > bbox[2]) {
+    map.setView([0, 0], map.getMinZoom(), {animate: false});
+    return;
+  }
+  map.fitBounds(asLeafletBounds(bbox), {
     padding: [22, 22], maxZoom: 10, animate: false
   });
 }
@@ -184,6 +192,10 @@ async function loadCatalog() {
     const firstLoad = !catalog;
     const releaseChanged = catalog?.version !== index.version;
     catalog = index;
+    monthlyActivity.setRegions(index.monthly);
+    const monthlyOption = $("map-mode").querySelector('[value="monthly"]');
+    monthlyOption.disabled = !index.monthly?.length;
+    if (monthlyOption.disabled && isMonthly()) $("map-mode").value = "detections";
     if (releaseChanged) {
       overviewRequest?.abort();
       overviewRequest = undefined;
@@ -198,7 +210,8 @@ async function loadCatalog() {
       $("date-end").value = last;
       appliedRange = dateRange();
     }
-    refreshSelection({force: true});
+    if (isMonthly()) await monthlyActivity.load();
+    else refreshSelection({force: true});
   } catch (error) {
     if (!request.signal.aborted) status("Could not load the published dataset. " + error.message, true);
   } finally {
@@ -213,6 +226,10 @@ function cancelSelection() {
 
 function refreshSelection({force = false, delay = 0} = {}) {
   if (!catalog || !appliedRange) return;
+  if (isMonthly()) {
+    renderMap(visible);
+    return;
+  }
   if (showingOverview()) {
     if (selection || force) {
       cancelSelection();
@@ -335,11 +352,29 @@ function renderOverview() {
   const dates = overview.start + " through " + shiftDay(overview.end_exclusive, -1) + " UTC";
   if (!points.length) return "No published detections for this sensor · " + dates;
 
-  const spread = overviewZoom - map.getMinZoom();
+  drawHeat(points);
+  return "All published dates · " + dates + " · Zoom in to use your selected dates";
+}
+
+function drawHeat(points) {
+  if (!points.length) {
+    overviewLayer.remove();
+    return;
+  }
+  const spread = map.getZoom() - map.getMinZoom();
   overviewLayer.setOptions({radius: 5 + 2 * spread, blur: 4 + spread});
   overviewLayer.setLatLngs(points);
   if (!map.hasLayer(overviewLayer)) overviewLayer.addTo(map);
-  return "All published dates · " + dates + " · Zoom in to use your selected dates";
+}
+
+function addHeatLegend(legend, label, sensorsLabel) {
+  const ramp = element("span", "", "heat-legend-ramp");
+  ramp.setAttribute("aria-hidden", "true");
+  const stops = Object.entries(heatGradient).sort(([a], [b]) => Number(a) - Number(b))
+    .map(([stop, color]) => color + " " + Number(stop) * 100 + "%");
+  ramp.style.background = "linear-gradient(to right, " + stops.join(", ") + ")";
+  legend.append(element("strong", label), element("span", "Low"),
+    ramp, element("span", "High"), element("span", sensorsLabel));
 }
 
 function boundsFromLeaflet(box) {
@@ -502,6 +537,11 @@ function mapPoint(point, focus = false) {
 function renderMap(points) {
   pointLayer.clearLayers();
   focusLayer.clearLayers();
+  if (isMonthly()) {
+    boundary.setStyle({opacity: 0});
+    monthlyActivity.render();
+    return;
+  }
   const wide = showingOverview();
   if (fixedBounds) boundary.setBounds(asLeafletBounds(fixedBounds));
   boundary.setStyle({opacity: fixedBounds && !wide ? 0.85 : 0});
@@ -515,13 +555,7 @@ function renderMap(points) {
   legend.replaceChildren();
   if (wide) {
     if (map.hasLayer(overviewLayer)) {
-      const ramp = element("span", "", "heat-legend-ramp");
-      ramp.setAttribute("aria-hidden", "true");
-      const stops = Object.entries(heatGradient).sort(([a], [b]) => Number(a) - Number(b))
-        .map(([stop, color]) => color + " " + Number(stop) * 100 + "%");
-      ramp.style.background = "linear-gradient(to right, " + stops.join(", ") + ")";
-      legend.append(element("strong", "Detection concentration"), element("span", "Low"),
-        ramp, element("span", "High"), element("span", selectedSensors().join(" + ")));
+      addHeatLegend(legend, "Detection concentration", selectedSensors().join(" + "));
     }
     return;
   }
@@ -584,10 +618,15 @@ function render() {
   $("area-name").textContent = showingOverview() ? "Regional overview" : selection?.area ?? "Map view";
   $("area-name").title = selection ? "W, S, E, N: " + bounds : "";
   $("fit-area").disabled = !catalog;
-  $("fit-area").textContent = fixedBounds ? "Fit box" : "Zoom to data";
-  $("draw-area").hidden = showingOverview();
+  const monthly = isMonthly();
+  $("explorer-filters").hidden = monthly || state.tab === "compare";
+  $("monthly-controls").hidden = !monthly;
+  $("monthly-panel").hidden = !monthly;
+  $("daily-panel").hidden = monthly;
+  $("fit-area").textContent = monthly ? "Fit region" : fixedBounds ? "Fit box" : "Zoom to data";
+  $("draw-area").hidden = monthly || showingOverview();
   $("draw-area").disabled = !catalog;
-  $("clear-box").hidden = !fixedBounds;
+  $("clear-box").hidden = monthly || !fixedBounds;
   $("apply-dates").disabled = !catalog;
   const selected = state.result && analysisDay(state.selected);
   const counts = selected?.counts.map(({sensor, count, partial}) =>
@@ -643,6 +682,21 @@ $("retry-data").addEventListener("click", () => {
   if (overview?.unavailable) overview = undefined;
   loadCatalog();
 });
+$("map-mode").addEventListener("change", () => {
+  setDrawing(false);
+  cancelSelection();
+  monthlyActivity.cancel();
+  selection = undefined;
+  state.result = null;
+  state.points = [];
+  render();
+  if (isMonthly()) {
+    status("Monthly activity · Combined sensors");
+    monthlyActivity.load();
+  } else {
+    refreshSelection({force: true});
+  }
+});
 $("date-range").addEventListener("submit", event => {
   event.preventDefault();
   const range = dateRange();
@@ -683,7 +737,13 @@ $("next").addEventListener("click", () => { state.page++; renderDetails(); });
 const tabs = ["map", "compare", "detections"];
 
 function showTab(tab, focusTab = false) {
-  if (tab !== "map") setDrawing(false);
+  if (tab !== "map") {
+    setDrawing(false);
+    if (isMonthly()) {
+      $("map-mode").value = "detections";
+      $("map-mode").dispatchEvent(new Event("change"));
+    }
+  }
   if (tab !== state.tab) {
     state.tab = tab;
     for (const id of tabs) {

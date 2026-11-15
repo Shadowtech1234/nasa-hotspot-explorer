@@ -33,12 +33,31 @@ uncovered area or date, or a failed packet, makes the affected sensor and day
 unavailable. Use **Reload data** to retry failed downloads. Input coverage does
 not describe satellite overpasses.
 
+## Monthly activity
+
+Change the map's **View** to **Monthly activity** and select a published region
+and month. The wide map shows combined sensor activity as heat. Zoom in to see
+grid region circles. Circle size shows activity and color shows the historical
+percentile. An incomplete month or a month with fewer than five complete prior
+comparisons has no percentile. Switch to **Detections** to filter by sensor or
+draw a custom box.
+
 ## Refresh the published data
 
 Keep the raw CSVs, input manifests, and FIRMS key local. Run the packager from the
 repository root:
 
     python -m backend.package_static --manifest backend/data/manifest.json --initial-bounds -124.5 37 -119 40
+
+To publish monthly activity alongside detections, first build a local archive
+as described in the [archive guide](../backend/howtotest.md). Add
+`--archive-output` pointing to the output directory that contains
+`history.json`. The packager includes the archive footprint by default.
+To publish named subsets, pass `--regions` with a JSON list of objects
+containing `id` (a unique lowercase slug), `label`, and
+`bbox` ([west, south, east, north]). Each region needs to lie within
+the archive. The browser fetches that region's calendar and the selected month's
+summary. Keep the local Parquet data and raw archive inputs outside the site.
 
 The command accepts the existing ingestion manifest. For a new extract, prepare a
 manifest next to its CSVs with the actual requested footprint and UTC interval.

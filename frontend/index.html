@@ -10,6 +10,7 @@
   <script defer src="assets/leaflet.js"></script>
   <script defer src="assets/leaflet-heat-global.js"></script>
   <script defer src="static-data.js"></script>
+  <script defer src="monthly.js"></script>
   <script defer src="app.js"></script>
   <script defer src="compare.js"></script>
 </head>
@@ -49,6 +50,7 @@
         <div class="panel-heading map-heading">
           <div><h2 id="map-title">Hotspot map</h2><p id="map-scope"></p></div>
           <div class="map-tools">
+            <label class="basemap-label">View <select id="map-mode"><option value="detections">Detections</option><option value="monthly" disabled>Monthly activity</option></select></label>
             <label class="basemap-label">Basemap <select id="basemap"><option value="satellite">Satellite</option><option value="simple">Simple</option></select></label>
             <button id="draw-area" type="button" aria-pressed="false">Draw box</button>
             <button id="clear-box" type="button" hidden>Clear box</button>
@@ -56,10 +58,18 @@
             <button id="resize-map" type="button" aria-pressed="false">Larger map</button>
           </div>
         </div>
+        <div id="monthly-controls" class="map-footer" hidden>
+          <label class="basemap-label">Published region <select id="monthly-region"></select></label>
+          <span class="subtle">Combined sensors</span>
+        </div>
         <div id="map" role="region" aria-label="Interactive hotspot map" aria-describedby="map-help" tabindex="0"></div>
         <div class="map-footer"><div id="legend" class="legend"></div><p id="map-help" class="map-help"></p></div>
       </section>
-      <section class="calendar-panel" aria-labelledby="calendar-title">
+      <section id="monthly-panel" class="calendar-panel" aria-labelledby="monthly-title" hidden>
+        <div class="panel-heading"><div><h2 id="monthly-title">Monthly activity calendar</h2><p>Combined sensor activity in cell-days</p></div></div>
+        <div id="monthly-calendar" class="monthly-calendar"></div>
+      </section>
+      <section id="daily-panel" class="calendar-panel" aria-labelledby="calendar-title">
         <div class="panel-heading"><div><h2 id="calendar-title">Burning activity calendar</h2><p>Detection counts by UTC day · 0 no detections · * partial coverage · ? source unavailable</p></div></div>
         <div id="calendar" class="calendar"></div>
       </section>

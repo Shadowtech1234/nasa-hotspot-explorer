@@ -266,3 +266,13 @@ dialog { border-radius: 22px; box-shadow: var(--lift); }
   height: .55rem;
   border-radius: 1rem;
 }
+
+.monthly-calendar {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(125px, 1fr));
+  gap: .35rem;
+  max-height: 24rem;
+  overflow: auto;
+}
+.monthly-day { padding: .45rem; }
+.monthly-day small { color: var(--muted); }

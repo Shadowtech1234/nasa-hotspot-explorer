@@ -78,6 +78,9 @@ const staticData = (() => {
 
   return {
     analyze,
+    indexUrl,
+    monthly: async (path, signal) =>
+      (await fetchFile(new URL(path, indexUrl), signal, "no-cache")).json(),
     index: async signal => (await fetchFile(indexUrl, signal, "no-cache")).json(),
     overview: async (catalog, signal) => (await fetchFile(new URL(catalog.overview, indexUrl), signal, "no-cache")).json()
   };
