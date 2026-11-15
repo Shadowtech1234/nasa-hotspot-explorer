@@ -5,13 +5,27 @@ const sensors = ["MODIS", "VIIRS"];
 const region = [-128, 23, -64, 51];
 const colors = {MODIS: "#ffac69", VIIRS: "#68dfed"};
 const number = new Intl.NumberFormat("en-US");
+const heatGradient = {0.2: "#4382cf", 0.45: "#56c4cf", 0.65: "#f4cf58", 0.82: "#f48b45", 1: "#c62445"};
 const monthName = new Intl.DateTimeFormat("en-US", {month: "long", year: "numeric", timeZone: "UTC"});
 const pageSize = 20;
-const state = {backend: null, sensor: "both", selected: "", page: 0, tab: "map", points: []};
-let calendarRequest;
-let mapRequest;
+const state = {result: null, sensor: "both", selected: "", page: 0, tab: "map", points: []};
+let catalog;
+const isMonthly = () => $("map-mode").value === "monthly";
+let catalogRequest;
+let selectionRequest;
+let selectionTimer;
+let selection;
+let fixedBounds;
+let appliedRange;
+let overview;
+let overviewRequest;
+let overviewZoom;
+let drawing = false;
+let dragStart;
+let dragBox;
+let dragPointer;
+let mapDragging;
 let basemapError = false;
-let fitOnShow = false;
 let visible = [];
 
 const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -24,13 +38,17 @@ map.attributionControl.setPrefix(false);
 map.createPane("basemap").style.zIndex = "220";
 map.createPane("global-imagery").style.zIndex = "225";
 map.createPane("imagery").style.zIndex = "230";
+map.createPane("overview-heat").style.zIndex = "250";
 L.control.scale({imperial: false, maxWidth: 88}).addTo(map);
 const boundary = L.rectangle(asLeafletBounds(region), {
   color: "#a3c2d5", opacity: 0.8, weight: 1, dashArray: "5 5", fill: false, interactive: false
 }).addTo(map);
 const pointLayer = L.layerGroup().addTo(map);
+const overviewLayer = L.heatLayer([], {
+  pane: "overview-heat", gradient: heatGradient, max: 1, maxZoom: map.getMinZoom(), minOpacity: 0.08
+});
 const focusLayer = L.layerGroup().addTo(map);
-map.fitBounds(asLeafletBounds(region), {padding: [22, 22]});
+map.setView([35, -115], 2);
 const scene = {
   date: "Nov 10, 2026 UTC",
   projectedBounds: [-14248894, 2632019, -7124447, 6621294],
@@ -97,7 +115,8 @@ function mapHelp() {
   } else if (basemapError) {
     imagery = "Simple basemap unavailable";
   }
-  const action = map.scrollWheelZoom.enabled()
+  const action = drawing ? "Drag corners to select an area. Esc cancels."
+    : map.scrollWheelZoom.enabled()
     ? "Scroll to zoom. Esc releases scrolling."
     : matchMedia("(pointer: coarse)").matches ? "Drag to pan. Pinch to zoom."
       : "Click or focus the map to scroll to zoom.";
@@ -109,11 +128,20 @@ function asLeafletBounds(bounds) {
 }
 
 function activeBounds() {
-  return state.backend?.bbox ?? region;
+  return selection?.bbox ?? fixedBounds ?? catalog?.initial_bbox ?? region;
 }
 
 function fitArea() {
-  map.fitBounds(asLeafletBounds(activeBounds()), {padding: [22, 22], maxZoom: 10, animate: false});
+  const monthlyBounds = isMonthly() ? monthlyActivity.bounds() : null;
+  const bbox = monthlyBounds ?? fixedBounds ?? catalog.initial_bbox;
+  // The existing world map shows each side of the antimeridian separately.
+  if (bbox[0] > bbox[2]) {
+    map.setView([0, 0], map.getMinZoom(), {animate: false});
+    return;
+  }
+  map.fitBounds(asLeafletBounds(bbox), {
+    padding: [22, 22], maxZoom: 10, animate: false
+  });
 }
 
 function element(tag, text = "", className = "") {
@@ -129,82 +157,284 @@ function status(text, error = false) {
 }
 
 function sourceLabel() {
-  if (!state.backend) return "Backend data unavailable";
+  if (!catalog) return "Published data unavailable";
   const labels = {MODIS_SP: "MODIS", VIIRS_SNPP_SP: "Suomi-NPP VIIRS"};
-  const sources = sensors.map(sensor => {
-    const source = state.backend.sources[sensor];
-    return labels[source] || source || sensor + " unavailable";
-  });
-  return "NASA FIRMS standard processing · " + sources.join(" + ");
+  const sources = Object.values(catalog.sources).map(product => labels[product] || product);
+  return "NASA FIRMS · " + sources.join(" + ");
 }
 
-async function fetchApi(path, signal) {
-  const response = await fetch(path, {signal, cache: "no-store"});
-  if (response.status === 503) throw new Error("The backend export is unavailable.");
-  if (!response.ok) throw new Error("The API returned HTTP " + response.status + ".");
-  return response.json();
+function shiftDay(day, offset) {
+  const date = new Date(day + "T00:00:00Z");
+  date.setUTCDate(date.getUTCDate() + offset);
+  return date.toISOString().slice(0, 10);
 }
 
-async function loadBackend() {
-  calendarRequest?.abort();
-  mapRequest?.abort();
+function dateRange() {
+  const start = $("date-start").value;
+  const last = $("date-end").value;
+  if (!start || !last || start > last) {
+    status("Choose a start date on or before the end date.", true);
+    return null;
+  }
+  return {start, end_exclusive: shiftDay(last, 1)};
+}
+
+async function loadCatalog() {
+  catalogRequest?.abort();
+  cancelSelection();
   const request = new AbortController();
-  calendarRequest = request;
+  catalogRequest = request;
   $("retry-data").disabled = true;
-  status("Loading the detection calendar…");
+  status("Loading the published dataset…");
   try {
-    const calendar = await fetchApi("/api/calendar", request.signal);
-    if (!Array.isArray(calendar.bbox) || calendar.bbox.length !== 4 ||
-        !calendar.bbox.every(Number.isFinite) || !calendar.data_version ||
-        !calendar.sources || !Array.isArray(calendar.rows) || !calendar.rows.length) {
-      throw new Error("The API calendar is missing dates, bounds, or sources.");
+    const index = await staticData.index(request.signal);
+    request.signal.throwIfAborted();
+    const firstLoad = !catalog;
+    const releaseChanged = catalog?.version !== index.version;
+    catalog = index;
+    monthlyActivity.setRegions(index.monthly);
+    const monthlyOption = $("map-mode").querySelector('[value="monthly"]');
+    monthlyOption.disabled = !index.monthly?.length;
+    if (monthlyOption.disabled && isMonthly()) $("map-mode").value = "detections";
+    if (releaseChanged) {
+      overviewRequest?.abort();
+      overviewRequest = undefined;
+      overview = undefined;
     }
-    const days = new Map(calendar.rows.map(row => [row.date_utc, row.sensor_detections]));
-    if (request.signal.aborted) return;
-    state.backend = {...calendar, days, area: calendar.region === "northern-california-demo"
-      ? "Northern California demo" : calendar.region};
-    if (state.tab === "map") fitArea();
-    else fitOnShow = true;
-    await selectBackendDay([...days.keys()].sort()[0]);
+    const last = shiftDay(catalog.end_exclusive, -1);
+    $("published-dates").textContent =
+      "Published dates (UTC) " + catalog.start + " through " + last + " · coverage varies by area and sensor";
+    if (firstLoad) {
+      // Start with at most the last month of the published dates.
+      $("date-start").value = [catalog.start, shiftDay(last, -30)].sort()[1];
+      $("date-end").value = last;
+      appliedRange = dateRange();
+    }
+    if (isMonthly()) await monthlyActivity.load();
+    else refreshSelection({force: true});
   } catch (error) {
-    if (!request.signal.aborted) {
-      status("Could not load the detection calendar. " + error.message, true);
-    }
+    if (!request.signal.aborted) status("Could not load the published dataset. " + error.message, true);
   } finally {
     if (!request.signal.aborted) $("retry-data").disabled = false;
   }
 }
 
-async function selectBackendDay(date) {
-  mapRequest?.abort();
-  const request = new AbortController();
-  mapRequest = request;
-  state.selected = date;
-  state.page = 0;
-  state.points = [];
-  status("Loading backend detections for " + date + "…");
-  render();
-  try {
-    const collection = await fetchApi("/api/map?date=" + encodeURIComponent(date), request.signal);
-    if (request.signal.aborted) return;
-    if (collection.metadata?.data_version !== state.backend.data_version) {
-      throw new Error("The export changed. Reload the backend data to refresh it.");
-    }
-    if (collection.type !== "FeatureCollection" || !Array.isArray(collection.features) ||
-        collection.metadata.date_utc !== date) {
-      throw new Error("The API map is missing a valid daily GeoJSON export.");
-    }
-    state.points = collection.features.map(({geometry, properties}) => ({
-      lon: geometry.coordinates[0], lat: geometry.coordinates[1], date,
-      sensor: properties.sensor, time: properties.acquired_at_utc.slice(11, 16),
-      satellite: properties.platform, confidence: properties.confidence_raw, frp: properties.frp_mw
-    }));
-    status(sourceLabel());
-  } catch (error) {
-    if (request.signal.aborted) return;
-    status("Detection map unavailable. " + error.message, true);
+function cancelSelection() {
+  clearTimeout(selectionTimer);
+  selectionRequest?.abort();
+}
+
+function refreshSelection({force = false, delay = 0} = {}) {
+  if (!catalog || !appliedRange) return;
+  if (isMonthly()) {
+    renderMap(visible);
+    return;
   }
+  if (showingOverview()) {
+    if (selection || force) {
+      cancelSelection();
+      setDrawing(false);
+      selection = undefined;
+      state.result = null;
+      state.points = [];
+      status("Zoom in to see individual detections and daily counts.");
+      render();
+    } else if (overview && overviewZoom !== map.getZoom()) {
+      renderMap(visible);
+    }
+    updateOverview();
+    return;
+  }
+
+  const bbox = fixedBounds ?? boundsFromLeaflet(map.getBounds());
+  const next = {bbox, area: fixedBounds ? "Drawn area" : "Map view", ...appliedRange};
+  if (!force && JSON.stringify(next) === JSON.stringify(selection)) return;
+  cancelSelection();
+  const request = new AbortController();
+  selectionRequest = request;
+  selection = next;
+  state.result = null;
+  state.points = [];
+  state.page = 0;
+  status("Loading detections for the selected area and dates…");
   render();
+  selectionTimer = setTimeout(() => loadSelection(next, request), delay);
+}
+
+async function loadSelection(query, request) {
+  try {
+    const {rows, unavailable_packets: missing} = await staticData.analyze(
+      catalog, query, request.signal,
+      () => status("Analyzing detections in your browser…"));
+    request.signal.throwIfAborted();
+    const days = new Map(rows.map(row => [row.date_utc, row.sensor_detections]));
+    const pointsByDay = new Map(rows.map(row => [row.date_utc, row.points]));
+    const partialByDay = new Map(rows.map(row => [row.date_utc, row.partial_sensors]));
+    state.result = {days, pointsByDay, partialByDay, missing};
+    selectDay(days.has(state.selected) ? state.selected : rows[0].date_utc);
+  } catch (error) {
+    if (!request.signal.aborted) status("Could not analyze the selection. " + error.message, true);
+  }
+}
+
+function selectDay(day) {
+  if (!state.result?.days.has(day)) return;
+  state.selected = day;
+  state.page = 0;
+  state.points = state.result.pointsByDay.get(day);
+  const counts = state.result.days.get(day);
+  const unavailable = selectedSensors().filter(sensor => counts[sensor] === null);
+  const message = [sourceLabel()];
+  if (state.result.missing) message.push("Some FIRMS packets could not be loaded. Reload data to retry.");
+  if (unavailable.length) {
+    message.push("Published input unavailable for " + unavailable.join(" and ") + " on " + day + ".");
+  }
+  const partial = selectedSensors().filter(sensor => state.result.partialByDay.get(day).includes(sensor));
+  if (partial.length) message.push("Partial coverage for " + partial.join(" and ") + " on " + day + ".");
+  status(message.join(" · "), Boolean(state.result.missing));
+  render();
+}
+
+function showingOverview() {
+  return map.getZoom() <= 4;
+}
+
+async function updateOverview() {
+  if (!catalog || !showingOverview() || overview || overviewRequest) return;
+  const request = new AbortController();
+  overviewRequest = request;
+  try {
+    const summary = await staticData.overview(catalog, request.signal);
+    request.signal.throwIfAborted();
+    overview = {...summary, heatPoints: buildHeatPoints(summary.cells)};
+  } catch {
+    if (!request.signal.aborted) overview = {unavailable: true};
+  } finally {
+    if (!request.signal.aborted) {
+      overviewRequest = undefined;
+      if (state.tab === "map") renderMap(visible);
+    }
+  }
+}
+
+function buildHeatPoints(cells) {
+  const combined = new Map();
+  for (const {bbox, center, count} of cells) {
+    const key = bbox.join(",");
+    if (!combined.has(key)) combined.set(key, {count: 0, latSum: 0, lonSum: 0});
+    const total = combined.get(key);
+    total.count += count;
+    total.latSum += center[1] * count;
+    total.lonSum += center[0] * count;
+  }
+  let maxCount = 1;
+  for (const {count} of combined.values()) maxCount = Math.max(maxCount, count);
+  // Use the same release-wide scale for all sensor choices and viewports.
+  const weight = count => Math.log1p(count) / Math.log1p(maxCount);
+  const result = {MODIS: [], VIIRS: [], both: []};
+  for (const {sensor, center, count} of cells) {
+    result[sensor].push([center[1], center[0], weight(count)]);
+  }
+  for (const {count, latSum, lonSum} of combined.values()) {
+    result.both.push([latSum / count, lonSum / count, weight(count)]);
+  }
+  return result;
+}
+
+function renderOverview() {
+  overviewZoom = map.getZoom();
+  const points = overview?.heatPoints?.[state.sensor];
+  if (!points?.length) overviewLayer.remove();
+  if (!catalog) return "Published data unavailable";
+  if (!overview) return "Loading the heat map…";
+  if (overview.unavailable) return "Heat map unavailable. Reload data to retry.";
+
+  const dates = overview.start + " through " + shiftDay(overview.end_exclusive, -1) + " UTC";
+  if (!points.length) return "No published detections for this sensor · " + dates;
+
+  drawHeat(points);
+  return "All published dates · " + dates + " · Zoom in to use your selected dates";
+}
+
+function drawHeat(points) {
+  if (!points.length) {
+    overviewLayer.remove();
+    return;
+  }
+  const spread = map.getZoom() - map.getMinZoom();
+  overviewLayer.setOptions({radius: 5 + 2 * spread, blur: 4 + spread});
+  overviewLayer.setLatLngs(points);
+  if (!map.hasLayer(overviewLayer)) overviewLayer.addTo(map);
+}
+
+function addHeatLegend(legend, label, sensorsLabel) {
+  const ramp = element("span", "", "heat-legend-ramp");
+  ramp.setAttribute("aria-hidden", "true");
+  const stops = Object.entries(heatGradient).sort(([a], [b]) => Number(a) - Number(b))
+    .map(([stop, color]) => color + " " + Number(stop) * 100 + "%");
+  ramp.style.background = "linear-gradient(to right, " + stops.join(", ") + ")";
+  legend.append(element("strong", label), element("span", "Low"),
+    ramp, element("span", "High"), element("span", sensorsLabel));
+}
+
+function boundsFromLeaflet(box) {
+  return [Math.max(-180, box.getWest()), Math.max(-85, box.getSouth()),
+    Math.min(180, box.getEast()), Math.min(85, box.getNorth())];
+}
+
+function setDrawing(active) {
+  if (drawing === active) return;
+  drawing = active;
+  $("draw-area").setAttribute("aria-pressed", String(active));
+  $("map").classList.toggle("drawing-box", active);
+  if (active) {
+    mapDragging = map.dragging.enabled();
+    map.dragging.disable();
+    $("map").focus({preventScroll: true});
+  } else {
+    if (mapDragging) map.dragging.enable();
+    if (dragPointer !== undefined && $("map").hasPointerCapture(dragPointer)) {
+      $("map").releasePointerCapture(dragPointer);
+    }
+    dragBox?.remove();
+    dragBox = undefined;
+    dragStart = undefined;
+    dragPointer = undefined;
+  }
+  mapHelp();
+}
+
+function startBox(event) {
+  if (!drawing || !event.isPrimary || event.button !== 0
+      || event.target.closest(".leaflet-control")) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  dragStart = map.mouseEventToContainerPoint(event);
+  dragPointer = event.pointerId;
+  $("map").setPointerCapture(dragPointer);
+  const origin = map.containerPointToLatLng(dragStart);
+  dragBox = L.rectangle([origin, origin], {color: "#fff", weight: 2, interactive: false}).addTo(map);
+}
+
+function moveBox(event) {
+  if (event.pointerId !== dragPointer) return;
+  const corner = map.mouseEventToLatLng(event);
+  dragBox.setBounds([map.containerPointToLatLng(dragStart), corner]);
+}
+
+function finishBox(event) {
+  if (event.pointerId !== dragPointer) return;
+  const corner = map.mouseEventToContainerPoint(event);
+  const largeEnough = Math.abs(corner.x - dragStart.x) >= 8 && Math.abs(corner.y - dragStart.y) >= 8;
+  const box = L.latLngBounds(map.containerPointToLatLng(dragStart), map.containerPointToLatLng(corner));
+  setDrawing(false);
+  const bbox = boundsFromLeaflet(box);
+  if (!largeEnough || bbox[0] >= bbox[2] || bbox[1] >= bbox[3]) {
+    status("Draw a larger box to select an area.", true);
+    return;
+  }
+  fixedBounds = bbox;
+  refreshSelection();
 }
 
 function fetchLocal(path) {
@@ -228,9 +458,12 @@ function selectedSensors() {
   return state.sensor === "both" ? sensors : [state.sensor];
 }
 
-function backendDay(date) {
-  const counts = state.backend.days.get(date);
-  return {date, counts: selectedSensors().map(sensor => ({sensor, count: counts[sensor]}))};
+function analysisDay(date) {
+  const counts = state.result.days.get(date);
+  const partial = state.result.partialByDay.get(date);
+  return {date, counts: selectedSensors().map(sensor => (
+    {sensor, count: counts[sensor], partial: partial.includes(sensor)}
+  ))};
 }
 
 function calendarCell({date, counts}) {
@@ -239,15 +472,15 @@ function calendarCell({date, counts}) {
   cell.classList.toggle("has-activity", counts.some(({count}) => count > 0));
   cell.dataset.date = date;
   cell.setAttribute("aria-pressed", String(date === state.selected));
-  const description = counts.map(({sensor, count}) =>
-    sensor + ": " + (count === null ? "source unavailable"
-      : count === 0 ? "no records" : number.format(count)));
+  const description = counts.map(({sensor, count, partial}) =>
+    sensor + ": " + (count === null ? "source unavailable" : number.format(count) + " detections")
+      + (partial ? ", partial coverage" : ""));
   cell.setAttribute("aria-label", date + " UTC. " + description.join(". "));
   cell.title = description.join(" · ");
   cell.append(element("strong", String(Number(date.slice(8)))));
-  for (const {sensor, count} of counts) {
+  for (const {sensor, count, partial} of counts) {
     const prefix = counts.length > 1 ? sensor[0] + " " : "";
-    const label = count === null ? "?" : number.format(count);
+    const label = count === null ? "?" : number.format(count) + (partial ? "*" : "");
     cell.append(element("span", prefix + label, count === null ? "unknown" : sensor.toLowerCase()));
   }
   return cell;
@@ -276,7 +509,7 @@ function renderCalendar(days) {
     }
     grid.append(calendarCell(day));
   }
-  if (!days.length) content.append(element("p", "The calendar will appear when the backend provides its exported dates.", "subtle"));
+  if (!days.length) content.append(element("p", "Zoom in to see daily detection counts for an area.", "subtle"));
   calendar.replaceChildren(content);
   calendar.scrollTop = scroll;
 }
@@ -304,11 +537,28 @@ function mapPoint(point, focus = false) {
 function renderMap(points) {
   pointLayer.clearLayers();
   focusLayer.clearLayers();
-  boundary.setBounds(asLeafletBounds(activeBounds()));
-  boundary.setStyle({opacity: state.backend ? 0.85 : 0});
-  for (const point of points) mapPoint(point).addTo(pointLayer);
+  if (isMonthly()) {
+    boundary.setStyle({opacity: 0});
+    monthlyActivity.render();
+    return;
+  }
+  const wide = showingOverview();
+  if (fixedBounds) boundary.setBounds(asLeafletBounds(fixedBounds));
+  boundary.setStyle({opacity: fixedBounds && !wide ? 0.85 : 0});
+  if (wide) $("map-scope").textContent = renderOverview();
+  else {
+    overviewLayer.remove();
+    $("map-scope").textContent = $("list-summary").textContent;
+    for (const point of points) mapPoint(point).addTo(pointLayer);
+  }
   const legend = $("legend");
   legend.replaceChildren();
+  if (wide) {
+    if (map.hasLayer(overviewLayer)) {
+      addHeatLegend(legend, "Detection concentration", selectedSensors().join(" + "));
+    }
+    return;
+  }
   for (const sensor of selectedSensors()) {
     const label = element("span", "", sensor.toLowerCase());
     const dot = element("i", "", "dot");
@@ -325,8 +575,8 @@ function renderDetails() {
   $("next").disabled = state.page + 1 >= pages;
   $("page").textContent = pages ? "Page " + (state.page + 1) + " of " + number.format(pages) : "";
   if (!pages) {
-    target.replaceChildren(element("p", state.backend
-      ? "No detections to display for this selection." : "Detection data will appear when the backend is connected."));
+    target.replaceChildren(element("p", state.result
+      ? "No detections to display for this selection." : "Select an area and dates to see individual detections."));
     return;
   }
   const table = element("table");
@@ -360,24 +610,35 @@ function renderDetails() {
 }
 
 function render() {
-  const days = state.backend ? [...state.backend.days.keys()].sort().map(backendDay) : [];
+  const days = state.result ? [...state.result.days.keys()].sort().map(analysisDay) : [];
   const sensorsShown = selectedSensors();
   visible = state.points.filter(point => sensorsShown.includes(point.sensor));
   state.page = Math.min(state.page, Math.max(0, Math.ceil(visible.length / pageSize) - 1));
   const bounds = activeBounds().map(value => value.toFixed(2)).join(", ");
-  $("area-name").textContent = state.backend?.area || "Study area pending";
-  $("area-name").title = state.backend ? "W, S, E, N: " + bounds : "";
-  $("fit-area").disabled = !state.backend;
-  const selected = state.backend && backendDay(state.selected);
-  const counts = selected?.counts.map(({sensor, count}) =>
-    sensor + " " + (count === null ? "unavailable" : number.format(count))).join(" · ");
-  const scope = selected ? state.selected + " UTC · " + counts : "No backend data loaded";
+  $("area-name").textContent = showingOverview() ? "Regional overview" : selection?.area ?? "Map view";
+  $("area-name").title = selection ? "W, S, E, N: " + bounds : "";
+  $("fit-area").disabled = !catalog;
+  const monthly = isMonthly();
+  $("explorer-filters").hidden = monthly || state.tab === "compare";
+  $("monthly-controls").hidden = !monthly;
+  $("monthly-panel").hidden = !monthly;
+  $("daily-panel").hidden = monthly;
+  $("fit-area").textContent = monthly ? "Fit region" : fixedBounds ? "Fit box" : "Zoom to data";
+  $("draw-area").hidden = monthly || showingOverview();
+  $("draw-area").disabled = !catalog;
+  $("clear-box").hidden = monthly || !fixedBounds;
+  $("apply-dates").disabled = !catalog;
+  const selected = state.result && analysisDay(state.selected);
+  const counts = selected?.counts.map(({sensor, count, partial}) =>
+    sensor + " " + (count === null ? "unavailable" : number.format(count))
+      + (partial ? " (partial)" : "")).join(" · ");
+  const scope = selected ? state.selected + " UTC · " + counts : "No detections loaded for this area and date range";
   $("map-scope").textContent = scope;
   $("list-summary").textContent = scope;
   mapHelp();
   $("provenance").textContent = sourceLabel();
-  $("coverage").textContent = state.backend
-    ? "Study bounds (west, south, east, north) " + bounds + ". Satellite observation coverage is unknown."
+  $("coverage").textContent = selection
+    ? "Selected bounds (west, south, east, north) " + bounds + ". Satellite observation coverage is unknown."
     : "";
   $("download-csv").disabled = !visible.length;
   for (const button of document.querySelectorAll("[data-sensor]")) {
@@ -417,19 +678,57 @@ $("download-csv").addEventListener("click", () => {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 
-$("retry-data").addEventListener("click", loadBackend);
+$("retry-data").addEventListener("click", () => {
+  if (overview?.unavailable) overview = undefined;
+  loadCatalog();
+});
+$("map-mode").addEventListener("change", () => {
+  setDrawing(false);
+  cancelSelection();
+  monthlyActivity.cancel();
+  selection = undefined;
+  state.result = null;
+  state.points = [];
+  render();
+  if (isMonthly()) {
+    status("Monthly activity · Combined sensors");
+    monthlyActivity.load();
+  } else {
+    refreshSelection({force: true});
+  }
+});
+$("date-range").addEventListener("submit", event => {
+  event.preventDefault();
+  const range = dateRange();
+  if (!range) return;
+  appliedRange = range;
+  refreshSelection();
+  if (showingOverview()) status("Dates applied. Zoom in for daily counts in this range.");
+});
+$("draw-area").addEventListener("click", () => setDrawing(!drawing));
+$("clear-box").addEventListener("click", () => {
+  setDrawing(false);
+  fixedBounds = undefined;
+  if (showingOverview()) render();
+  else refreshSelection();
+  $(showingOverview() ? "fit-area" : "draw-area").focus();
+});
+$("map").addEventListener("pointerdown", startBox, true);
+$("map").addEventListener("pointermove", moveBox);
+$("map").addEventListener("pointerup", finishBox);
+$("map").addEventListener("pointercancel", () => setDrawing(false));
 $("fit-area").addEventListener("click", fitArea);
 for (const button of document.querySelectorAll("[data-sensor]")) {
   button.addEventListener("click", () => {
     state.sensor = button.dataset.sensor;
-    state.page = 0;
-    render();
+    if (state.result) selectDay(state.selected);
+    else render();
   });
 }
 $("calendar").addEventListener("click", event => {
   const date = event.target.closest("button[data-date]")?.dataset.date;
   if (!date) return;
-  selectBackendDay(date);
+  selectDay(date);
   $("calendar").querySelector('[data-date="' + date + '"]')?.focus({preventScroll: true});
 });
 $("previous").addEventListener("click", () => { state.page--; renderDetails(); });
@@ -438,6 +737,13 @@ $("next").addEventListener("click", () => { state.page++; renderDetails(); });
 const tabs = ["map", "compare", "detections"];
 
 function showTab(tab, focusTab = false) {
+  if (tab !== "map") {
+    setDrawing(false);
+    if (isMonthly()) {
+      $("map-mode").value = "detections";
+      $("map-mode").dispatchEvent(new Event("change"));
+    }
+  }
   if (tab !== state.tab) {
     state.tab = tab;
     for (const id of tabs) {
@@ -449,10 +755,7 @@ function showTab(tab, focusTab = false) {
     $("explorer-filters").hidden = tab === "compare";
     if (tab === "map") {
       map.invalidateSize({pan: true});
-      if (fitOnShow) {
-        fitOnShow = false;
-        fitArea();
-      }
+      refreshSelection();
       renderMap(visible);
     } else {
       setWheel(false);
@@ -500,11 +803,17 @@ document.addEventListener("pointerdown", event => {
   if (!$("map").contains(event.target)) setWheel(false);
 });
 $("map").addEventListener("keydown", event => {
-  if (event.key === "Escape") setWheel(false);
+  if (event.key === "Escape") {
+    setDrawing(false);
+    setWheel(false);
+  }
 });
-map.on("moveend", mapHelp);
+map.on("moveend", () => {
+  mapHelp();
+  if (state.tab === "map") refreshSelection({delay: 150});
+});
 new ResizeObserver(resizeMap).observe($("map"));
 
 setBasemap("satellite");
 render();
-loadBackend();
+loadCatalog();
