@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Explore and compare NASA FIRMS active fire detections by area, sensor, and date.">
+  <title>Hotspot Explorer | NASA Space Apps project</title>
+  <link rel="stylesheet" href="assets/leaflet.css">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="assets/leaflet.js"></script>
+  <script defer src="app.js"></script>
+  <script defer src="compare.js"></script>
+</head>
+<body>
+  <a class="skip" href="#workspace">Skip to explorer</a>
+  <header class="top">
+    <a class="identity" href="#workspace"><span class="mark" aria-hidden="true"></span><span>Hotspot Explorer</span></a>
+    <a class="challenge" href="https://www.spaceappschallenge.org/2026/challenges/modis-and-viirs-hot-spots/">NASA Space Apps <span aria-hidden="true">↗</span></a>
+  </header>
+  <main id="workspace">
+    <div class="intro">
+      <h1>Burning activity explorer</h1>
+      <div class="tabs" role="tablist" aria-label="Explorer views">
+        <button id="map-tab" type="button" role="tab" aria-controls="map-panel" aria-selected="true">Map &amp; Calendar</button>
+        <button id="compare-tab" type="button" role="tab" aria-controls="compare-panel" aria-selected="false" tabindex="-1">Compare</button>
+        <button id="detections-tab" type="button" role="tab" aria-controls="detections-panel" aria-selected="false" tabindex="-1">Detections</button>
+      </div>
+    </div>
+    <section id="explorer-filters" class="filters" aria-label="Explorer filters">
+      <div class="filter" id="sensor-control"><span class="caption">Sensor</span><div class="segments" role="group" aria-label="Sensor">
+        <button type="button" data-sensor="both" aria-pressed="true">Both</button><button type="button" data-sensor="MODIS" aria-pressed="false">MODIS</button><button type="button" data-sensor="VIIRS" aria-pressed="false">VIIRS</button>
+      </div></div>
+      <div class="filter"><span class="caption">Study area</span><span id="area-name" class="subtle"></span></div>
+    </section>
+    <div class="actions">
+      <p id="status" class="status" role="status">Loading the detection calendar…</p>
+      <button id="retry-data" type="button">Reload data</button>
+    </div>
+    <section id="map-panel" role="tabpanel" aria-labelledby="map-tab">
+      <section class="map-panel" aria-labelledby="map-title">
+        <div class="panel-heading map-heading">
+          <div><h2 id="map-title">Hotspot map</h2><p id="map-scope"></p></div>
+          <div class="map-tools">
+            <label class="basemap-label">Basemap <select id="basemap"><option value="satellite">Satellite</option><option value="simple">Simple</option></select></label>
+            <button id="fit-area" type="button">Fit area</button>
+            <button id="resize-map" type="button" aria-pressed="false">Larger map</button>
+          </div>
+        </div>
+        <div id="map" role="region" aria-label="Interactive hotspot map" aria-describedby="map-help" tabindex="0"></div>
+        <div class="map-footer"><div id="legend" class="legend"></div><p id="map-help" class="map-help"></p></div>
+      </section>
+      <section class="calendar-panel" aria-labelledby="calendar-title">
+        <div class="panel-heading"><div><h2 id="calendar-title">Burning activity calendar</h2><p>Exported UTC dates · 0 no detections · ? source unavailable</p></div></div>
+        <div id="calendar" class="calendar"></div>
+      </section>
+    </section>
+    <section id="compare-panel" role="tabpanel" aria-labelledby="compare-tab" hidden>
+      <section class="compare-card" aria-labelledby="sensor-title">
+        <div class="compare-header">
+          <div><h3 id="sensor-title">One area, two sensors</h3><p id="sensor-scope"></p></div>
+          <div class="actions"><label class="filter">Observation date (UTC)<select id="compare-date" disabled></select></label>
+            <button id="compare-fit" type="button">Fit study area</button></div>
+        </div>
+        <div id="compare-mobile" class="segments" role="group" aria-label="Sensor shown on map">
+          <button type="button" data-compare-view="MODIS" aria-pressed="true">MODIS</button>
+          <button type="button" data-compare-view="VIIRS" aria-pressed="false">VIIRS</button>
+        </div>
+        <div class="sensor-metrics" aria-label="Sensor observations">
+          <div class="sensor-metric modis"><span>MODIS · about 1 km</span><strong id="compare-modis"></strong></div>
+          <div class="sensor-metric viirs"><span>VIIRS · about 375 m</span><strong id="compare-viirs"></strong></div>
+        </div>
+        <div id="compare-maps" class="compare-maps" data-active="MODIS">
+          <div id="compare-map-modis" class="compare-map" role="region" aria-label="MODIS comparison map" tabindex="0"></div>
+          <div id="compare-map-viirs" class="compare-map" role="region" aria-label="VIIRS comparison map" tabindex="0"></div>
+        </div>
+        <p class="compare-note" id="compare-visual-note"></p>
+        <p class="compare-note">Resolution, overpass timing, and detection methods differ. Both counts describe observations, which can include repeat views of the same fire.</p>
+      </section>
+    </section>
+    <section id="detections-panel" role="tabpanel" aria-labelledby="detections-tab" hidden>
+      <section class="data-controls" aria-labelledby="data-title">
+        <div><h2 id="data-title">Data source</h2><p id="provenance"></p></div>
+      </section>
+      <section class="detail-panel" aria-labelledby="detail-title">
+        <div class="panel-heading"><div><h2 id="detail-title">Detections</h2><p id="list-summary"></p></div><button id="download-csv" type="button" disabled>Download filtered CSV</button></div>
+        <div id="details"></div>
+        <div class="pagination"><button id="previous" type="button">Previous</button><span id="page"></span><button id="next" type="button">Next</button></div>
+      </section>
+      <details class="sources">
+      <summary>Data &amp; methods</summary>
+      <p id="coverage"></p>
+      <p>Raw counts are satellite observations of thermal anomalies. Repeated observations may refer to the same fire. MODIS and VIIRS have different resolutions and overpass times. Clouds, smoke, and gaps between overpasses can hide activity.</p>
+      <p>A zero means the available source reported no detections in the study area on that day. A question mark means the source is unavailable.</p>
+      <p><a href="https://firms.modaps.eosdis.nasa.gov/download/">NASA FIRMS archive</a> · <a href="https://forum.earthdata.nasa.gov/viewtopic.php?t=5178">NASA detection guidance</a> · <a href="https://www.naturalearthdata.com/">Natural Earth basemap</a></p>
+    </details>
+    </section>
+  </main>
+</body>
+</html>
