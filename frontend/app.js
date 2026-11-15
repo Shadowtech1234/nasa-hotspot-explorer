@@ -692,7 +692,7 @@ $("map-mode").addEventListener("change", () => {
   render();
   if (isMonthly()) {
     status("Monthly activity · Combined sensors");
-    monthlyActivity.load();
+    monthlyActivity.load({focus: true});
   } else {
     refreshSelection({force: true});
   }

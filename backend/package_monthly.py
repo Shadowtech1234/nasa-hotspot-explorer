@@ -32,7 +32,8 @@ def monthly_files(archive_output, regions_file=None):
         if not isinstance(label, str) or not label.strip():
             raise ValueError("Published regions need a display name.")
         bbox = history.selection(",".join(map(str, parse_bounds(region["bbox"]))))
-        calendar = history.calendar(bbox, history.start, history.end, "month")["rows"]
+        calendar = [row for row in history.calendar(bbox, history.start, history.end, "month")["rows"]
+                    if row["standard_days"] or row["provisional_days"]]
         prefix = f"monthly/{region_id}"
         for row in calendar:
             path = f"{prefix}/{row['date_utc'][:7]}.json"

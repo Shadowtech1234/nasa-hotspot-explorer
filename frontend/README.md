@@ -3,7 +3,7 @@
 The map, calendar, and sensor comparison run from static files. JavaScript selects
 the FIRMS CSV packets for the requested bounds and dates. A PyScript worker runs
 the Python analysis with Pyodide and returns daily detection counts and points.
-The counts are a demo metric until the analysis algorithm is ready.
+Monthly activity uses precomputed archive results and historical percentiles.
 
 ## Run locally
 
@@ -12,8 +12,20 @@ From the repository root:
     python -m http.server 8000 --bind 127.0.0.1 --directory frontend
 
 Open http://127.0.0.1:8000/. The browser downloads the pinned PyScript runtime
-and Pyodide on the first detailed analysis. The packaged Northern California
-sample covers August 1–5, 2025 UTC.
+and Pyodide on the first detailed analysis. The default site uses its checked-in
+five-day sample.
+
+For the generated Western US preview, package to the Git-ignored
+`frontend/data/local` directory and open
+[the local dataset](http://127.0.0.1:8000/?data=local). It covers the
+full month of August in each year from 2019 through 2024. It includes Central
+California, Northern California, and Southern Oregon, within bounds
+[-122.75, 38, -119.5, 44]. Other months have no published sample data.
+
+The sample uses standard-processing MODIS and Suomi-NPP VIIRS observations
+clipped from the NASA FIRMS [US yearly country downloads](https://firms.modaps.eosdis.nasa.gov/country/).
+Select August 2024 in **Monthly activity** to see a percentile calculated
+against the five earlier Augusts.
 
 The wide view shows detection concentration in a heat map. Zoom in and pan
 to load individual detections and daily counts for the map view. Use **Zoom to

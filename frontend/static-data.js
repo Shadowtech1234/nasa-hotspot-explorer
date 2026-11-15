@@ -1,7 +1,9 @@
 "use strict";
 
 const staticData = (() => {
-  const indexUrl = new URL("./data/index.json", window.location.href);
+  const useLocalSample = new URLSearchParams(window.location.search).get("data") === "local";
+  const indexUrl = new URL(useLocalSample ? "./data/local/index.json" : "./data/index.json",
+    window.location.href);
   const runtime = "https://pyscript.net/releases/2026.7.2/core.js";
   let workerPromise;
 

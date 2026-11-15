@@ -51,9 +51,9 @@ const monthlyActivity = (() => {
     return request;
   }
 
-  async function load(regionId = regions.value) {
+  async function load({focus = false} = {}) {
     request?.abort();
-    const next = published.find(item => item.id === regionId);
+    const next = published.find(item => item.id === regions.value);
     const previousMonth = selected?.date_utc;
     if (region?.id !== next?.id) selected = undefined;
     region = next;
@@ -61,6 +61,7 @@ const monthlyActivity = (() => {
     error = undefined;
     rows = [];
     showCalendar();
+    if (focus && region) focusRegion();
     renderMap(visible);
     if (!region) return;
 
@@ -131,14 +132,22 @@ const monthlyActivity = (() => {
     if (usable_days < days_in_month) details.push("Partial month · " + usable_days + " comparable days");
     details.push(historical_percentile == null ? "Percentile unavailable" :
       "Regional percentile " + number.format(Math.round(historical_percentile)));
-    scope.textContent = details.join(" · ");
-
     const wide = showingOverview();
     const features = summary.maps[wide ? "2" : "3"];
     const value = feature => feature.properties.activity ?? feature.properties.observed_cell_days ?? 0;
     const maximum = features.reduce((max, feature) => Math.max(max, value(feature)), 0);
+    const mapFeatures = wide ? features.filter(feature => value(feature) > 0) : features;
+    if (mapFeatures.length && !mapFeatures.some(feature => {
+      const [lon, lat] = feature.geometry.coordinates;
+      return map.getBounds().contains([lat, lon]);
+    })) {
+      details.push("Activity is outside this view. Use Fit region.");
+    } else if (amount === 0) {
+      details.push("No monthly activity reported");
+    }
+    scope.textContent = details.join(" · ");
     if (wide) {
-      const heat = features.filter(feature => value(feature) > 0).map(feature => {
+      const heat = mapFeatures.map(feature => {
         const [lon, lat] = feature.geometry.coordinates;
         return [lat, lon, Math.log1p(value(feature)) / Math.log1p(maximum)];
       });
@@ -175,14 +184,16 @@ const monthlyActivity = (() => {
     }
   }
 
-  regions.addEventListener("change", () => {
-    load();
-    if (!showingOverview()) fitArea();
-    else if (region) {
-      const [west, south, east, north] = region.bbox;
-      map.panTo([(south + north) / 2, east < west ? 180 : (west + east) / 2]);
+  function focusRegion() {
+    if (!showingOverview()) {
+      fitArea();
+      return;
     }
-  });
+    const [west, south, east, north] = region.bbox;
+    map.panTo([(south + north) / 2, east < west ? 0 : (west + east) / 2], {animate: false});
+  }
+
+  regions.addEventListener("change", () => load({focus: true}));
 
   return {setRegions, load, render, cancel: () => request?.abort(), bounds: () => region?.bbox};
 })();
