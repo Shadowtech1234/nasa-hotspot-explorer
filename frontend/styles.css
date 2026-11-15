@@ -83,6 +83,17 @@ h1 { font: 500 clamp(2rem, 4vw, 3.1rem)/1.03 "Instrument Serif", Georgia, serif;
 .archive-months button[aria-pressed=true] { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 .archive-months strong { font-variant-numeric: tabular-nums; }
 .archive-months .partial { border-style: dashed; }
+.archive-months .high { background: #fff0e5; border-color: #a64021; }
+.archive-months .low { background: #e8f4ff; border-color: #276899; }
+.percentile-panel { margin-top: 1rem; }
+.percentile-panel h3 { font-size: 1rem; }
+#percentile-chart { overflow-x: auto; padding: .5rem 0; }
+.percentile-plot { position: relative; display: flex; height: 160px; width: max-content; min-width: 100%; padding-left: 2rem; }
+.percentile-guide { position: absolute; inset-inline: 0; bottom: var(--rank); border-top: 1px dashed var(--line); font-size: .7rem; color: var(--muted); pointer-events: none; }
+.percentile-month { position: relative; width: 25px; flex-shrink: 0; }
+.percentile-point { position: absolute; bottom: var(--rank); transform: translateY(50%); width: 15px; min-height: 15px; height: 15px; padding: 0; border-radius: 50%; border-color: currentColor; background: currentColor; }
+.percentile-point[aria-pressed=true] { outline: 2px solid var(--ink); outline-offset: 2px; }
+.percentile-year { position: absolute; bottom: 0; font-size: .65rem; color: var(--muted); }
 #archive-peak { margin-top: .25rem; }
 .calendar-panel, .detail-panel, .sources { margin-top: 1.1rem; padding-top: .85rem; border-top: 1px solid var(--line); }
 .calendar { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); align-items: start; gap: .85rem 1.2rem; margin-top: .65rem; max-height: 560px; overflow: auto; }

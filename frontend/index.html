@@ -42,6 +42,7 @@
         <div class="panel-heading">
           <div><h2 id="archive-title">Historical burning activity</h2><p>Suomi-NPP-equivalent active cell-days, by UTC month</p></div>
           <label class="filter">Calendar year <select id="archive-year"></select></label>
+          <label class="filter" id="archive-choice" hidden>Archive <select id="archive-dataset"></select></label>
         </div>
         <form id="archive-selection" class="filters archive-filters">
           <label class="filter" for="archive-bounds">Area (west, south, east, north)
@@ -56,12 +57,17 @@
         <div id="archive-months" class="archive-months"></div>
         <p id="archive-month-summary" class="subtle" aria-live="polite"></p>
         <p id="archive-peak" class="subtle"></p>
+        <section class="percentile-panel" aria-labelledby="percentile-title">
+          <h3 id="percentile-title">Monthly percentile</h3>
+          <p class="subtle">Compared with the same month in earlier years for this area. Gaps indicate insufficient history.</p>
+          <div id="percentile-chart"></div>
+        </section>
       </section>
       <section class="map-panel" aria-labelledby="map-title">
         <div class="panel-heading map-heading">
           <div><h2 id="map-title">Hotspot map</h2><p id="map-scope"></p></div>
           <div class="map-tools">
-            <label id="map-layer-control" class="basemap-label" hidden>Layer <select id="map-layer"><option value="cells">Active cells</option><option value="detections">Raw detections</option></select></label>
+            <label id="map-layer-control" class="basemap-label" hidden>Layer <select id="map-layer"><option value="overview">Monthly activity</option><option value="cells">Active cells</option><option value="detections">Raw detections</option></select></label>
             <label class="basemap-label">Basemap <select id="basemap"><option value="satellite">Satellite</option><option value="simple">Simple</option></select></label>
             <button id="fit-area" type="button">Fit area</button>
             <button id="resize-map" type="button" aria-pressed="false">Larger map</button>

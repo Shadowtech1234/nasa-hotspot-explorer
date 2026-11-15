@@ -10,6 +10,9 @@ const pageSize = 20;
 const state = {backend: null, history: null, selection: null, month: "", sensor: "both", selected: "", page: 0,
   tab: "map", points: [], cells: [], offsets: {}, mapPending: false};
 let historyRequest;
+let overviewRequest;
+let overviewData;
+let overviewKey;
 let calendarRequest;
 let mapRequest;
 let basemapError = false;
@@ -186,23 +189,31 @@ function apiUrl(path, params) {
 }
 
 function archiveUrl(path, params) {
-  return apiUrl(path, {...params, bbox: state.history.bbox.join(","), version: state.history.data_version});
+  return apiUrl(path, {...params, ...archiveDataset(), bbox: state.history.bbox.join(","), version: state.history.data_version});
+}
+
+function archiveDataset() {
+  const dataset = $("archive-dataset").value;
+  return dataset ? {dataset} : {};
 }
 
 async function loadBackend(selection = null) {
   historyRequest?.abort();
+  overviewRequest?.abort();
+  overviewKey = null;
   const request = new AbortController();
   historyRequest = request;
   $("retry-data").disabled = true;
   status("Loading the burning activity calendar…");
   try {
-    const calendar = await fetchApi(selection ? apiUrl("/api/calendar", selection) : "/api/calendar", request.signal);
+    const calendar = await fetchApi(apiUrl("/api/calendar", {...selection, ...archiveDataset()}), request.signal);
     if (request.signal.aborted) return;
     state.selection = selection;
     if (calendar.archive) {
       state.history = calendar;
       const previous = calendar.rows.find(row => row.date_utc === state.month);
-      const latest = calendar.rows.findLast(row => row.activity !== null || row.provisional_days > 0) ?? calendar.rows.at(-1);
+      const latest = calendar.rows.findLast(row => row.activity !== null) ??
+        calendar.rows.findLast(row => row.observed_cell_days > 0 || row.provisional_days > 0) ?? calendar.rows.at(-1);
       configureArchive(calendar);
       await selectArchiveMonth(previous ?? latest, true);
     } else {
@@ -246,6 +257,12 @@ function renderArchive() {
     const amount = row.activity === null ? (row.provisional_days ? "Provisional only" : "Index unavailable")
       : number.format(Math.round(row.activity)) + (row.usable_days < row.days_in_month ? " · partial" : "");
     button.append(element("span", monthName.format(new Date(row.date_utc))), element("strong", amount, "harmonized"));
+    if (row.historical_percentile != null) {
+      const level = percentileLevel(row.historical_percentile);
+      if (level.key === "high" || level.key === "low") button.classList.add(level.key);
+      button.append(element("small", "Percentile " + number.format(row.historical_percentile) +
+        (["high", "low"].includes(level.key) ? " · " + level.label : "")));
+    }
     return button;
   }));
   if (focused) $("archive-months").querySelector('[data-month="' + focused + '"]')?.focus({preventScroll: true});
@@ -254,7 +271,9 @@ function renderArchive() {
   const observed = current.observed_cell_days === null ? "Standard-processing activity unavailable"
     : number.format(current.observed_cell_days) + " observed cell-days";
   const estimate = sourceDays.length && (current.source_days["Suomi-NPP"] !== current.usable_days) ? "Includes estimates" : "";
-  const baseline = current.historical_median === null ? "" :
+  const baseline = current.historical_median === null ?
+    (current.usable_days < current.days_in_month ? "Percentile unavailable for an incomplete month"
+      : "Percentile needs five complete earlier years · " + current.baseline_years + " available") :
     "Historical median " + number.format(Math.round(current.historical_median)) + " · Percentile " +
       number.format(Math.round(current.historical_percentile)) + " across " + current.baseline_years + " years";
   $("archive-month-summary").textContent = [observed, current.usable_days + " of " + current.days_in_month + " comparable days",
@@ -263,6 +282,81 @@ function renderArchive() {
     (best, row) => !best || row.activity > best.activity ? row : best, null);
   $("archive-peak").textContent = peak ? "Peak complete month in this selection · " + monthName.format(new Date(peak.date_utc)) +
     " · " + number.format(Math.round(peak.activity)) + " cell-days" : "";
+  renderPercentiles();
+}
+
+const percentileLevels = [
+  {key: "high", label: "Unusually high", color: "#ff7043"},
+  {key: "above", label: "Above typical", color: "#ffbe63"},
+  {key: "typical", label: "Typical range", color: "#77daa5"},
+  {key: "below", label: "Below typical", color: "#77c9f4"},
+  {key: "low", label: "Unusually low", color: "#7e9eff"},
+  {key: "unknown", label: "Percentile unavailable", color: "#c5b6d7"},
+];
+
+function percentileLevel(rank) {
+  return percentileLevels[rank == null ? 5 : rank >= 90 ? 0 : rank >= 75 ? 1 : rank > 25 ? 2 : rank > 10 ? 3 : 4];
+}
+
+function renderPercentiles() {
+  const chart = $("percentile-chart");
+  if (!state.history.rows.some(row => row.historical_percentile != null)) {
+    chart.replaceChildren(element("p", "This selection has no months with a complete historical comparison.", "subtle"));
+    return;
+  }
+  const plot = element("div", "", "percentile-plot");
+  for (const rank of [0, 10, 50, 90, 100]) {
+    const line = element("span", String(rank), "percentile-guide");
+    line.style.setProperty("--rank", (5 + rank * 0.9) + "%");
+    plot.append(line);
+  }
+  let selectedSlot;
+  for (const [index, row] of state.history.rows.entries()) {
+    const slot = element("div", "", "percentile-month");
+    if (index === 0 || row.date_utc.slice(5, 7) === "01") {
+      slot.append(element("span", row.date_utc.slice(0, 4), "percentile-year"));
+    }
+    if (row.historical_percentile != null) {
+      const rank = row.historical_percentile;
+      const button = element("button", "", "percentile-point");
+      button.type = "button";
+      button.title = monthName.format(new Date(row.date_utc)) + " · Percentile " + number.format(rank);
+      button.setAttribute("aria-label", button.title);
+      button.setAttribute("aria-pressed", String(row.date_utc === state.month));
+      button.style.setProperty("--rank", (5 + rank * 0.9) + "%");
+      button.style.color = percentileLevel(rank).color;
+      button.onclick = () => selectArchiveMonth(row);
+      slot.append(button);
+    }
+    if (row.date_utc === state.month) selectedSlot = slot;
+    plot.append(slot);
+  }
+  chart.replaceChildren(plot);
+  if (selectedSlot) chart.scrollLeft = Math.max(0, selectedSlot.offsetLeft - chart.clientWidth / 2);
+}
+
+async function loadOverview(month) {
+  if (!month || $("map-layer").value !== "overview") return;
+  const resolution = map.getZoom() >= 5 ? 3 : 2;
+  const url = archiveUrl("/api/overview", {month: month.date_utc, start: month.first_day,
+    end: dateOffset(month.last_day, 1), resolution});
+  if (url === overviewKey) return;
+  overviewKey = url;
+  overviewRequest?.abort();
+  const request = new AbortController();
+  overviewRequest = request;
+  overviewData = null;
+  if (state.tab === "map") renderMap(visible);
+  try {
+    const result = await fetchApi(url, request.signal);
+    if (request.signal.aborted) return;
+    overviewData = result;
+  } catch (error) {
+    if (request.signal.aborted) return;
+    overviewKey = null;
+    overviewData = {error: error.message};
+  }
+  if (!request.signal.aborted && state.tab === "map") renderMap(visible);
 }
 
 async function selectArchiveMonth(month, refit = false) {
@@ -285,7 +379,9 @@ async function selectArchiveMonth(month, refit = false) {
     else if (refit) fitOnShow = true;
     const preferred = state.backend.days.has(state.selected) ? state.selected : (daily.rows.findLast(row =>
       Object.values(row.sensor_detections).some(count => count > 0)) ?? daily.rows.at(-1)).date_utc;
-    await selectBackendDay(preferred);
+    $("map-layer").value = "overview";
+    loadOverview(month);
+    await selectBackendDay(preferred, true);
   } catch (error) {
     if (!request.signal.aborted) status("Could not load daily observations. " + error.message, true);
   }
@@ -317,7 +413,7 @@ function acceptMapPage(collection, date, key) {
   state.offsets[key] = collection.metadata.next_offset;
 }
 
-async function selectBackendDay(date) {
+async function selectBackendDay(date, preserveLayer = false) {
   mapRequest?.abort();
   const request = new AbortController();
   mapRequest = request;
@@ -327,7 +423,7 @@ async function selectBackendDay(date) {
   state.cells = [];
   state.offsets = {};
   state.mapPending = true;
-  if (state.history) {
+  if (state.history && !preserveLayer) {
     const day = state.backend.rowsByDay.get(date);
     $("map-layer").value = !day.standard_platforms.length && day.provisional_platforms.length ? "detections" : "cells";
   }
@@ -350,6 +446,7 @@ async function selectBackendDay(date) {
 }
 
 function nextMapKeys() {
+  if (state.tab === "map" && $("map-layer").value === "overview") return [];
   const keys = state.tab === "map" && $("map-layer").value === "cells" ? ["cells"]
     : state.tab === "compare" ? sensors : selectedSensors();
   return keys.filter(key => state.offsets[key] != null);
@@ -479,6 +576,10 @@ function renderMap(points) {
   focusLayer.clearLayers();
   boundary.setLatLngs(areaOutline(activeBounds()));
   boundary.setStyle({opacity: state.backend ? 0.85 : 0});
+  if (state.history && $("map-layer").value === "overview") {
+    renderOverview();
+    return;
+  }
   const showCells = state.history && $("map-layer").value === "cells";
   if (showCells) {
     for (const cell of state.cells) {
@@ -499,6 +600,51 @@ function renderMap(points) {
     dot.setAttribute("aria-hidden", "true");
     label.append(dot, document.createTextNode(sensor));
     legend.append(label);
+  }
+}
+
+function renderOverview() {
+  const legend = $("legend");
+  legend.replaceChildren(element("span", "Size · monthly activity"));
+  for (const level of percentileLevels) {
+    const item = element("span");
+    const dot = element("i", "", "dot");
+    dot.style.color = level.color;
+    item.append(dot, document.createTextNode(level.label));
+    legend.append(item);
+  }
+  const features = overviewData?.features ?? [];
+  $("map-scope").textContent = monthName.format(new Date(state.month)) + " · " +
+    (overviewData?.error ?? (!overviewData ? "Loading monthly activity…" : features.length
+      ? (overviewData.metadata.complete_month ? "Monthly activity by grid region" : "Partial month · percentile unavailable")
+      : "No standard-processing activity reported for this selection"));
+  const maximum = features.reduce((max, f) => Math.max(max, f.properties.activity ?? f.properties.observed_cell_days), 1);
+  for (const feature of features) {
+    const [lon, lat] = feature.geometry.coordinates;
+    const row = feature.properties;
+    const level = percentileLevel(row.historical_percentile);
+    const activity = row.activity ?? row.observed_cell_days;
+    L.circleMarker([lat, lon], {
+      radius: 3 + 22 * Math.sqrt(activity / maximum),
+      fillColor: level.color, fillOpacity: 0.8, color: "#172535", weight: 1
+    }).bindPopup(() => {
+      const popup = element("div");
+      popup.append(element("strong", level.label));
+      popup.append(element("div", number.format(Math.round(activity)) +
+        (row.activity == null ? " observed cell-days" : " comparable cell-days")));
+      if (row.historical_percentile != null) popup.append(element("div",
+        "Percentile " + number.format(row.historical_percentile) + " across " + row.baseline_years +
+        " years · median " + number.format(Math.round(row.historical_median))));
+      if (state.history.archive_bbox.join() === "-180,-90,180,90") {
+        const select = element("button", "Use region bounds");
+        select.type = "button";
+        select.onclick = () => loadBackend({
+          bbox: row.bbox.join(","), start: state.history.start, end: state.history.end_exclusive
+        });
+        popup.append(select);
+      }
+      return popup;
+    }).addTo(pointLayer);
   }
 }
 
@@ -621,7 +767,14 @@ $("download-csv").addEventListener("click", () => {
 
 $("retry-data").addEventListener("click", () => loadBackend(state.selection));
 $("fetch-next").addEventListener("click", loadMoreMap);
-$("map-layer").addEventListener("change", render);
+$("map-layer").addEventListener("change", () => {
+  render();
+  loadOverview(state.history?.rows.find(row => row.date_utc === state.month));
+});
+$("archive-dataset").addEventListener("change", () => {
+  state.month = "";
+  loadBackend();
+});
 $("archive-selection").addEventListener("submit", event => {
   event.preventDefault();
   loadBackend({bbox: $("archive-bounds").value, start: $("archive-start").value, end: dateOffset($("archive-end").value, 1)});
@@ -724,8 +877,12 @@ $("map").addEventListener("keydown", event => {
   if (event.key === "Escape") setWheel(false);
 });
 map.on("moveend", mapHelp);
+map.on("zoomend", () => loadOverview(state.history?.rows.find(row => row.date_utc === state.month)));
 new ResizeObserver(resizeMap).observe($("map"));
 
 setBasemap("satellite");
 render();
-loadBackend();
+fetchApi("/api/archives").then(archives => {
+  $("archive-dataset").replaceChildren(...archives.map(archive => new Option(archive.name, archive.id)));
+  $("archive-choice").hidden = archives.length < 2;
+}).catch(() => {}).finally(() => loadBackend());

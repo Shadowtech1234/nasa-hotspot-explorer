@@ -361,6 +361,11 @@ class History:
                 "metric": "snpp_equivalent_active_cell_days" if granularity == "month" else "observed_active_cell_days",
                 "product_coverage": self.manifest["product_coverage"], "rows": rows}
 
+    def overview(self, bbox, month, start, end, resolution=2):
+        if month.day != 1 or not self.start <= start < end <= self.end or start.strftime("%Y-%m") != month.strftime("%Y-%m") or end > month_end(month.strftime("%Y-%m")):
+            raise ValueError("Select a date interval inside one archive month")
+        return overview_regions(self, bbox, month, start, end, resolution)
+
     def map_points(self, day, bbox, layer, sensor, limit, offset):
         info = self.days[day]
         month = day[:7]
@@ -399,3 +404,63 @@ class History:
 
 def point(lon, lat, properties):
     return {"type": "Feature", "geometry": {"type": "Point", "coordinates": [lon, lat]}, "properties": properties}
+
+
+@lru_cache(maxsize=32)
+def overview_regions(history, bbox, month, start, end, resolution):
+    """Aggregate fine cells to map regions before ranking their historical totals."""
+    key = month.strftime("%Y-%m")
+    complete = Counter(day[:7] for day, info in history.days.items() if info["mode"])
+    baseline = sorted(past for past, count in complete.items()
+                      if past < key and past[5:] == key[5:]
+                      and count == (month_end(past) - parse_day(past + "-01")).days)
+    complete_current = start == month and end == month_end(key) and complete[key] == (end - start).days
+    days = {day.isoformat(): history.days[day.isoformat()] for day in date_range(start, end)}
+    usable = any(info["mode"] for info in days.values())
+    paths = [history.manifest["monthly"][past] for past in baseline if past in history.manifest["monthly"]]
+    observed_totals = defaultdict(dict)
+    bounds, params = bbox_filter(bbox, "cell_lon", "cell_lat")
+    # H3 stores the resolution above the base cell and pads unused child digits with ones.
+    # Roll up in DuckDB so a worldwide query sends only region-month totals to Python.
+    region_id = f"((cell & {~(15 << 52)}) | {resolution << 52} | {(1 << ((15 - resolution) * 3)) - 1})"
+    with connect(history.output) as db:
+        if paths:
+            rows = db.execute(f"""
+                SELECT month, {region_id} AS region, sum(activity) FROM read_parquet(?) WHERE {bounds}
+                GROUP BY month, region
+            """, [partitions(history.output, paths), *params]).fetchall()
+            for past, region, activity in rows:
+                observed_totals[region][past] = activity or 0
+        current_path = history.manifest["cells"].get(key)
+        current = defaultdict(lambda: [0, 0.0])
+        if current_path:
+            insert_days(db, days)
+            factor_path = history.output / "history" / history.version / "factors.parquet"
+            db.execute("CREATE TEMP TABLE factor AS SELECT * FROM read_parquet(?)", [factor_path.as_posix()])
+            rows = db.execute(f"""
+                SELECT {region_id} AS region, count(*), sum(activity) FROM ({WEIGHTED_CELLS})
+                WHERE {bounds} GROUP BY region
+            """, [(history.output / current_path).as_posix(), *params]).fetchall()
+            for region, observed, activity in rows:
+                current[region] = (observed, activity or 0)
+    features = []
+    # Regions with past activity can show an unusually quiet month with zero reports.
+    for region in sorted(current.keys() | (observed_totals.keys() if complete_current else set())):
+        observed, value = current[region]
+        past = [observed_totals[region].get(year, 0) for year in baseline]
+        percentile = historical_median = None
+        if complete_current and len(past) >= 5:
+            historical_median = median(past)
+            percentile = 100 * (sum(item < value for item in past) + 0.5 * sum(item == value for item in past)) / len(past)
+        lat, lon = h3.cell_to_latlng(region)
+        boundary = h3.cell_to_boundary(region)
+        unwrapped = [lon + (x - lon + 180) % 360 - 180 for _, x in boundary]
+        wrap = lambda x: (x + 180) % 360 - 180
+        region_bbox = [wrap(min(unwrapped)), min(y for y, _ in boundary),
+                       wrap(max(unwrapped)), max(y for y, _ in boundary)]
+        features.append(point(lon, lat, {"region": h3.int_to_str(region), "activity": value if usable else None,
+                                         "bbox": region_bbox,
+                                         "observed_cell_days": observed, "baseline_years": len(past),
+                                         "historical_median": historical_median, "historical_percentile": percentile}))
+    return {"type": "FeatureCollection", "features": features,
+            "metadata": {**history.metadata(bbox), "complete_month": complete_current}}

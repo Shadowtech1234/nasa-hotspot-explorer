@@ -1,5 +1,26 @@
 ## Build the historical archive
 
+### Worldwide deployment
+
+Build the worldwide manifest with one entry per product and covered date interval.
+Download the global standard-processing CSV/ZIP extracts from FIRMS and keep
+them on a volume with room for both extracts and the generated Parquet files.
+Include declared gaps and known outages before calibration. Each archive build
+reuses the imported monthly partitions by their content hashes. Copy the whole
+output root when packaging a release for another machine, including its active
+pointer, history, raw, and cell directories. The monthly map queries these
+partitions and caches regional summaries by release and selection.
+
+Set `FIRMS_WORLD_OUTPUT_DIR` to the worldwide build's output root before
+starting Uvicorn. A separately configured `FIRMS_OUTPUT_DIR` remains available
+from the archive selector. For a partial worldwide sample, name it with its
+actual dates and coverage. The calendar and map report percentile gaps for
+months without five comparable earlier years.
+
+The monthly map uses symbol size for activity and color for local percentile.
+Zoom in for finer regions, click a symbol for its values, or choose a daily
+observation for the active cells and raw detection layers.
+
 Use Python 3.10 or later and install `backend/requirements.txt`. Request
 worldwide CSV extracts from the [NASA FIRMS archive](https://firms.modaps.eosdis.nasa.gov/download/)
 for MODIS Collection 6.1 and VIIRS Collection 2. List the files and their actual

@@ -114,6 +114,18 @@ class ArchiveTest(unittest.TestCase):
     def test_repeat_build_uses_same_release(self):
         self.assertEqual(build_archive(self.config, self.output), self.release)
 
+    def test_monthly_map_totals_and_partial_percentiles(self):
+        month = date(2024, 1, 1)
+        for end in (date(2024, 2, 1), date(2024, 1, 4)):
+            expected, = self.calendar(month.isoformat(), end.isoformat())
+            for resolution in (2, 3):
+                overview = self.history.overview(WORLD, month, month, end, resolution)
+                rows = [feature["properties"] for feature in overview["features"]]
+                self.assertTrue(rows)
+                self.assertEqual(sum(row["activity"] for row in rows), expected["activity"])
+                self.assertEqual(sum(row["observed_cell_days"] for row in rows), expected["observed_cell_days"])
+                self.assertEqual(all(row["historical_percentile"] is None for row in rows), end.month == 1)
+
     def test_invalid_replacement_leaves_active_release_available(self):
         invalid = self.config.parent / "invalid.csv"
         invalid.write_text("latitude,longitude\n0,0\n", encoding="utf-8")

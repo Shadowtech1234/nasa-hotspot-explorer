@@ -28,7 +28,7 @@ class Sensor(str, Enum):
     VIIRS = "VIIRS"
 
 
-def create_app(output_dir=OUTPUT_DIR):
+def create_app(output_dir=OUTPUT_DIR, world_output=None):
     app = FastAPI(title="NASA Hotspot Explorer")
     output_dir = Path(output_dir)
 
@@ -39,19 +39,31 @@ def create_app(output_dir=OUTPUT_DIR):
             raise HTTPException(503, "Demo data unavailable. Generate the backend outputs.") from None
 
     # Read the active release on each request so rebuilds can go live without a restart.
-    def archive(version):
+    def archive(version, dataset=None):
         try:
-            result = open_history(output_dir)
+            primary = open_history(output_dir)
+            world = open_history(Path(world_output)) if world_output else None
+            result = primary if dataset == "regional" else world if dataset == "world" else world or primary
         except (OSError, ValueError, KeyError):
             raise HTTPException(503, "Archive release is unavailable") from None
         if version and (result is None or result.version != version):
             raise HTTPException(409, "The archive changed. Reload the calendar.")
         return result
 
+    @app.get("/api/archives")
+    def archives():
+        choices = []
+        for key, path in (("world", world_output), ("regional", output_dir)):
+            release = open_history(Path(path)) if path else None
+            if release:
+                choices.append({"id": key, "name": release.manifest["region"]})
+        return choices
+
     @app.get("/api/calendar")
     def calendar(bbox: str | None = None, start: str | None = None, end: str | None = None,
-                 granularity: Literal["day", "month"] | None = None, version: str | None = None):
-        release = archive(version)
+                 granularity: Literal["day", "month"] | None = None, version: str | None = None,
+                 dataset: Literal["regional", "world"] | None = None):
+        release = archive(version, dataset)
         if release is not None:
             try:
                 return release.calendar(release.selection(bbox), parse_day(start) if start else release.start,
@@ -69,7 +81,7 @@ def create_app(output_dir=OUTPUT_DIR):
     def map_points(date: str, sensor: Sensor | None = None, bbox: str | None = None,
                    layer: Literal["cells", "detections"] = "detections", version: str | None = None,
                    limit: Annotated[int, Query(ge=1, le=5000)] = 3000,
-                   offset: Annotated[int, Query(ge=0)] = 0):
+                   offset: Annotated[int, Query(ge=0)] = 0, dataset: Literal["regional", "world"] | None = None):
         try:
             if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", date):
                 raise ValueError
@@ -77,7 +89,7 @@ def create_app(output_dir=OUTPUT_DIR):
         except ValueError:
             raise HTTPException(422, "date must be a valid YYYY-MM-DD UTC date") from None
 
-        release = archive(version)
+        release = archive(version, dataset)
         if release is not None:
             if day not in release.days:
                 raise HTTPException(404, "Date is outside the archive release")
@@ -105,14 +117,28 @@ def create_app(output_dir=OUTPUT_DIR):
         return JSONResponse(collection, media_type="application/geo+json")
 
     @app.get("/api/validation")
-    def validation(version: str | None = None):
-        release = archive(version)
+    def validation(version: str | None = None, dataset: Literal["regional", "world"] | None = None):
+        release = archive(version, dataset)
         if release is None:
             raise HTTPException(404, "Calibration results require a FIRMS archive release")
         try:
             return release.validation()
         except (OSError, ValueError):
             raise HTTPException(503, "Calibration results are unavailable") from None
+
+    @app.get("/api/overview")
+    def overview(month: str, start: str, end: str, bbox: str | None = None, version: str | None = None,
+                 dataset: Literal["regional", "world"] | None = None,
+                 resolution: Literal["2", "3"] = "2"):
+        release = archive(version, dataset)
+        if release is None:
+            raise HTTPException(404, "The monthly map requires an archive release")
+        try:
+            return release.overview(release.selection(bbox), parse_day(month), parse_day(start), parse_day(end), int(resolution))
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        except (OSError, duckdb.Error):
+            raise HTTPException(503, "Could not load the monthly map") from None
 
     # Register this last so the root mount cannot intercept API or docs routes.
     if (FRONTEND_DIR / "index.html").is_file():
@@ -125,4 +151,4 @@ def parse_date(value):
     return date.fromisoformat(value).isoformat()
 
 
-app = create_app(os.environ.get("FIRMS_OUTPUT_DIR", OUTPUT_DIR))
+app = create_app(os.environ.get("FIRMS_OUTPUT_DIR", OUTPUT_DIR), os.environ.get("FIRMS_WORLD_OUTPUT_DIR"))
