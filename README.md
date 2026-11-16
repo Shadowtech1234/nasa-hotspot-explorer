@@ -26,5 +26,10 @@ the build command and `python -m uvicorn backend.api:app --host 0.0.0.0 --port $
 as the start command.
 
 Set `FIRMS_OUTPUT_DIR=backend/deploy-data/western-us` and use `/api/health` as
-the health check path. The bundled Western US archive covers August 2019
-through 2024. The app queries that release without a FIRMS key.
+the health check path. The bundled Western US archive covers January 2019
+through December 2024 within 122.75°W to 119.5°W and 38°N to 44°N. It uses
+standard-processing MODIS and Suomi-NPP VIIRS detections from NASA FIRMS,
+accessed through the [Portolan mirror](https://source.coop/portolan-mirrors/firms-catalog).
+The release audit lists the source files and dates with no worldwide
+standard-processing records for a satellite. The app queries the prepared
+release without a FIRMS key.
