@@ -21,12 +21,13 @@ class ArchiveTest(unittest.TestCase):
         cls.output = root / "output"
         inputs = []
 
-        def register(product, start, end, rows):
+        def register(product, start, end, rows, powers=None):
             filename = f"{product}-{start}.csv"
             with (root / filename).open("w", encoding="utf-8", newline="") as stream:
                 writer = csv.writer(stream)
                 writer.writerow(["acq_date", "satellite", "latitude", "longitude", "confidence", "type", "acq_time", "frp"])
-                writer.writerows((*row, "0042", 10) for row in rows)
+                writer.writerows((*row, "0042", 10 if powers is None else powers[index])
+                                 for index, row in enumerate(rows))
             inputs.append({"product": product, "start": start, "end_exclusive": end, "path": filename})
 
         for product, platform, latitude_longitudes, confidence in (
@@ -43,7 +44,8 @@ class ArchiveTest(unittest.TestCase):
 
         old = ("2001-08-01", "Terra", 38.2, -122.6, "40", "0")
         register("MODIS_SP", "2001-08-01", "2001-08-03", [old, old,
-                 ("2001-08-01", "T", 38.24, -122.6, "29", "0"), ("2001-08-01", "T", 38.28, -122.6, "99", "2")])
+                 ("2001-08-01", "T", 38.24, -122.6, "29", "0"), ("2001-08-01", "T", 38.28, -122.6, "99", "2")],
+                 powers=[10, 10, None, 120])
         register("VIIRS_SNPP_SP", "2026-11-01", "2026-11-03", [("2026-11-02", "N", 10, 20, "N", "0")])
         register("VIIRS_NOAA20_SP", "2026-11-01", "2026-11-04", [("2026-11-02", "N20", 38.2, -122.6, "N", "0")])
         register("VIIRS_NOAA20_NRT", "2026-11-02", "2026-11-05", [
@@ -136,6 +138,15 @@ class ArchiveTest(unittest.TestCase):
         density = self.history.daily_density("2026-11-04", bbox, .25)
         self.assertEqual(sum(feature["properties"]["count"] for feature in density["features"]), 2)
         self.assertEqual({feature["properties"]["sensor"] for feature in density["features"]}, {"VIIRS"})
+
+    def test_frp_map_ranks_measured_detections_before_pagination(self):
+        query = ("2001-08-01", WORLD, "frp", "MODIS")
+        first = self.history.map_points(*query, 1, 0)
+        self.assertEqual(first["metadata"]["next_offset"], 1)
+        second = self.history.map_points(*query, 2, 1)
+        self.assertIsNone(second["metadata"]["next_offset"])
+        features = first["features"] + second["features"]
+        self.assertEqual([feature["properties"]["frp_mw"] for feature in features], [120, 10, 10])
 
     def test_repeat_build_uses_same_release(self):
         self.assertEqual(build_archive(self.config, self.output), self.release)

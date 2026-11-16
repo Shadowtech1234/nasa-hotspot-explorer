@@ -93,7 +93,7 @@ def create_app(output_dir=OUTPUT_DIR, world_output=None):
 
     @app.get("/api/map")
     def map_points(date: str, sensor: Sensor | None = None, bbox: str | None = None,
-                   layer: Literal["cells", "detections"] = "detections", version: str | None = None,
+                   layer: Literal["cells", "detections", "frp"] = "detections", version: str | None = None,
                    limit: Annotated[int, Query(ge=1, le=5000)] = 3000,
                    offset: Annotated[int, Query(ge=0)] = 0, dataset: Literal["regional", "world"] | None = None):
         try:
@@ -114,7 +114,7 @@ def create_app(output_dir=OUTPUT_DIR, world_output=None):
             except (OSError, duckdb.Error):
                 raise HTTPException(503, "Could not query the FIRMS archive") from None
             return JSONResponse(collection, media_type="application/geo+json")
-        if bbox or layer == "cells" or offset:
+        if bbox or layer == "cells" or (offset and layer != "frp"):
             raise HTTPException(422, "Requested map layer or filter requires a FIRMS archive release")
         # The manifest defines which UTC dates have map files in this release.
         collection = demo_map(day)
@@ -125,6 +125,11 @@ def create_app(output_dir=OUTPUT_DIR, world_output=None):
                 if feature["properties"]["sensor"] == sensor.value
             ]
             collection["metadata"]["selected_sensor"] = sensor.value
+        if layer == "frp":
+            measured = [feature for feature in collection["features"] if feature["properties"]["frp_mw"] is not None]
+            measured.sort(key=lambda feature: -feature["properties"]["frp_mw"])
+            collection["features"] = measured[offset:offset + limit]
+            collection["metadata"]["next_offset"] = offset + limit if offset + limit < len(measured) else None
         return JSONResponse(collection, media_type="application/geo+json")
 
     @app.get("/api/validation")

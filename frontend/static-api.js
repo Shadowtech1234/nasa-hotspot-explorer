@@ -131,10 +131,18 @@ const publishedApi = (() => {
         }
         const density = url.pathname === "/api/density";
         const sensor = p.get("sensor");
-        const features = p.get("layer") === "cells" ? [] : points.filter(item => !sensor || item.sensor === sensor).map(item =>
+        const layer = p.get("layer");
+        const selected = layer === "cells" ? [] : points.filter(item => !sensor || item.sensor === sensor);
+        const ranked = layer === "frp" ? selected.filter(item => Number.isFinite(item.frp))
+          .sort((a, b) => b.frp - a.frp) : selected;
+        const offset = Number(p.get("offset") ?? 0);
+        const end = offset + Number(p.get("limit") ?? 3000);
+        const next_offset = layer === "frp" && end < ranked.length ? end : null;
+        const page = layer === "frp" ? ranked.slice(offset, end) : ranked;
+        const features = page.map(item =>
           point(item, density ? {sensor: item.sensor, count: 1} : {sensor: item.sensor, platform: item.satellite,
             acquired_at_utc: item.date + "T" + item.time, confidence_raw: item.confidence, frp_mw: item.frp}));
-        return {type: "FeatureCollection", features, metadata: {...metadata, date_utc: date, next_offset: null}};
+        return {type: "FeatureCollection", features, metadata: {...metadata, date_utc: date, next_offset}};
       }
       case "/api/analytics": {
         const rows = await detections(release, bbox, start, end_exclusive, signal);

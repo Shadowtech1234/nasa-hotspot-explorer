@@ -479,14 +479,16 @@ class History:
                       *params, limit + 1, offset]).fetchall()
                 features = [point(lon, lat, {"cell": h3.int_to_str(cell), "platforms": platform_names(mask)})
                             for lon, lat, cell, mask in rows]
-            if layer == "detections" and month in self.manifest["raw"]:
+            if layer in ("detections", "frp") and month in self.manifest["raw"]:
                 bounds, params = bbox_filter(bbox, "longitude", "latitude")
+                measured = "AND frp_mw IS NOT NULL" if layer == "frp" else ""
+                order = "frp_mw DESC, acquired_at_utc, record_id" if layer == "frp" else "acquired_at_utc, record_id"
                 rows = db.execute(f"""
                     SELECT longitude, latitude, record_id, sensor, platform, acquired_at_utc, confidence_raw, frp_mw,
                            fire_type, version, product, processing, eligible
                     FROM read_parquet(?) WHERE date_utc = ?::DATE AND (processing = 'SP' OR platform_mask & ? <> 0)
-                         AND (? IS NULL OR sensor = ?) AND {bounds}
-                    ORDER BY acquired_at_utc, record_id LIMIT ? OFFSET ?
+                         AND (? IS NULL OR sensor = ?) AND {bounds} {measured}
+                    ORDER BY {order} LIMIT ? OFFSET ?
                 """, [partitions(self.output, self.manifest["raw"][month]), day, info["nrt"], sensor, sensor,
                       *params, limit + 1, offset]).fetchall()
                 fields = ("record_id", "sensor", "platform", "acquired_at_utc", "confidence_raw", "frp_mw",

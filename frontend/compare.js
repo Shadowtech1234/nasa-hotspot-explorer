@@ -104,11 +104,13 @@
   }
 
   window.addEventListener("hotspot:compare", renderSensors);
-  $("compare-basemap").value = document.documentElement.dataset.theme ?? "dark";
+  $("compare-basemap").value = document.documentElement.dataset.theme === "light" ? "light" : "dark";
   window.addEventListener("hotspot:theme", event => {
-    if ($("compare-basemap").value === "satellite") return;
-    $("compare-basemap").value = event.detail;
-    if (views.size) setComparisonBasemap();
+    if ($("compare-basemap").value !== "satellite") $("compare-basemap").value = event.detail;
+    if (views.size) {
+      setComparisonBasemap();
+      renderSensors();
+    }
   });
   $("compare-date").addEventListener("change", event =>
     selectBackendDay(event.target.value, $("map-layer").value === "overview"));

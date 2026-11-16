@@ -10,8 +10,18 @@ const monthName = new Intl.DateTimeFormat("en-US", {month: "long", year: "numeri
 const monthShort = new Intl.DateTimeFormat("en-US", {month: "short", timeZone: "UTC"});
 const ordinal = new Intl.PluralRules("en-US", {type: "ordinal"});
 const pageSize = 20;
+const frpLevels = [
+  {min: 0, label: "0–<10", color: "#f6da70", radius: 4},
+  {min: 10, label: "10–<50", color: "#ffb551", radius: 5.5},
+  {min: 50, label: "50–<100", color: "#ff863b", radius: 7},
+  {min: 100, label: "100–<500", color: "#e94d2f", radius: 9},
+  {min: 500, label: "500+", color: "#b7193f", radius: 11.5}
+];
 const state = {backend: null, history: null, selection: null, month: "", sensor: "both", selected: "", page: 0,
   tab: "map", points: [], cells: [], offsets: {}, mapPending: false};
+let detectionView = "list";
+let frpData;
+let focusedFrp;
 let historyRequest;
 let overviewRequest;
 let overviewData;
@@ -105,8 +115,9 @@ function setBasemap(choice) {
 }
 
 function basemapStyle(choice) {
-  return choice === "light" ? {color: "#a5b3a9", weight: 0.65, fillColor: "#d6dfd4", fillOpacity: 1}
-    : {color: "#3f5757", weight: 0.65, fillColor: "#202e2e", fillOpacity: 1};
+  const palette = choice === "light" ? ["#a5b3a9", "#d6dfd4"]
+    : document.documentElement.dataset.theme === "ember" ? ["#614e66", "#35293d"] : ["#3f5757", "#202e2e"];
+  return {color: palette[0], weight: 0.65, fillColor: palette[1], fillOpacity: 1};
 }
 
 function mapHelp() {
@@ -393,12 +404,11 @@ function renderPercentiles(history, selectedMonth, position) {
   guides.setAttribute("aria-hidden", "true");
   plot.append(guides);
   const positionFor = rank => (5 + rank * .9) + "%";
-  for (const rank of [0, 10, 50, 90, 100]) {
+  for (const rank of [0, 20, 40, 60, 80, 100]) {
     const tick = element("span", String(rank), "percentile-tick");
     const line = element("span", "", "percentile-guide");
     tick.style.setProperty("--rank", positionFor(rank));
     line.style.setProperty("--rank", positionFor(rank));
-    if (rank === 50) line.classList.add("percentile-median");
     axis.append(tick);
     guides.append(line);
   }
@@ -508,29 +518,77 @@ async function selectArchiveMonth(month, {refit = false, history = state.history
 }
 
 function mapPage(date, layer, signal, sensor, offset = 0) {
-  const params = {date, layer, offset, limit: layer === "cells" ? 2500 : 1500};
+  const params = {date, layer, offset, limit: layer === "frp" ? pageSize * 5 : layer === "cells" ? 2500 : 1500};
   if (sensor) params.sensor = sensor;
-  return fetchApi(state.history ? archiveUrl("/api/map", params) : apiUrl("/api/map", {date}), signal);
+  return fetchApi(state.history ? archiveUrl("/api/map", params)
+    : apiUrl("/api/map", layer === "frp" ? params : {date}), signal);
 }
 
-function acceptMapPage(collection, date, key) {
+function validateMapPage(collection, date) {
   if (collection.metadata?.data_version !== state.backend.data_version) {
     throw new Error("The export changed. Reload the backend data to refresh it.");
   }
   if (collection.type !== "FeatureCollection" || !Array.isArray(collection.features) || collection.metadata.date_utc !== date) {
     throw new Error("The API map is missing a valid daily GeoJSON export.");
   }
-  for (const {geometry, properties} of collection.features) {
+}
+
+function detectionPoint({geometry, properties}, date) {
+  const [lon, lat] = geometry.coordinates;
+  return {lon, lat, date, sensor: properties.sensor, time: properties.acquired_at_utc.slice(11, 16),
+    satellite: properties.platform, confidence: properties.confidence_raw, frp: properties.frp_mw,
+    processing: properties.processing, eligible: properties.eligible};
+}
+
+function acceptMapPage(collection, date, key) {
+  validateMapPage(collection, date);
+  for (const feature of collection.features) {
+    const {geometry, properties} = feature;
     const [lon, lat] = geometry.coordinates;
     if (key === "cells") {
       state.cells.push({lon, lat, date, cell: properties.cell, platforms: properties.platforms});
     } else {
-      state.points.push({lon, lat, date, sensor: properties.sensor, time: properties.acquired_at_utc.slice(11, 16),
-        satellite: properties.platform, confidence: properties.confidence_raw, frp: properties.frp_mw,
-        processing: properties.processing, eligible: properties.eligible});
+      state.points.push(detectionPoint(feature, date));
     }
   }
   state.offsets[key] = collection.metadata.next_offset;
+}
+
+function resetFrp() {
+  frpData?.request.abort();
+  frpData = null;
+  focusedFrp = null;
+}
+
+function ensureFrp() {
+  if (!frpData && state.backend?.days.has(state.selected)) {
+    frpData = {points: [], offset: 0, request: new AbortController()};
+    loadFrpPage(frpData);
+  }
+}
+
+async function loadFrpPage(data, advanceFrom = null) {
+  if (data.pending || data.offset == null) return;
+  data.pending = true;
+  data.error = "";
+  const date = state.selected;
+  const sensor = state.sensor === "both" ? null : state.sensor;
+  const signal = data.request.signal;
+  try {
+    const collection = await mapPage(date, "frp", signal, sensor, data.offset);
+    if (signal.aborted) return;
+    validateMapPage(collection, date);
+    data.points.push(...collection.features.map(feature => detectionPoint(feature, date)));
+    data.offset = collection.metadata.next_offset;
+    if (state.tab === "detections" && detectionView === "frp" && state.page === advanceFrom) state.page++;
+  } catch (error) {
+    if (!signal.aborted) data.error = "Could not load fire radiative power. " + error.message;
+  } finally {
+    if (!signal.aborted) {
+      data.pending = false;
+      render();
+    }
+  }
 }
 
 async function selectBackendDay(date, preserveLayer = false) {
@@ -539,12 +597,13 @@ async function selectBackendDay(date, preserveLayer = false) {
   const request = new AbortController();
   mapRequest = request;
   state.selected = date;
+  resetFrp();
   state.page = 0;
   state.points = [];
   state.cells = [];
   state.offsets = {};
   state.mapPending = true;
-  if (state.history && !preserveLayer) {
+  if (state.history && !preserveLayer && $("map-layer").value !== "frp") {
     const day = state.backend.rowsByDay.get(date);
     $("map-layer").value = state.history.published || (!day.standard_platforms.length && day.provisional_platforms.length)
       ? "detections" : "cells";
@@ -570,7 +629,7 @@ async function selectBackendDay(date, preserveLayer = false) {
 
 function nextMapKeys() {
   if (state.tab === "history") return [];
-  if (state.tab === "map" && $("map-layer").value === "density") return [];
+  if (state.tab === "map" && ["density", "frp"].includes($("map-layer").value)) return [];
   const keys = state.tab === "map" && $("map-layer").value === "cells" ? ["cells"]
     : state.tab === "compare" ? sensors : selectedSensors();
   return keys.filter(key => state.offsets[key] != null);
@@ -813,6 +872,38 @@ function mapPoint(point, focus = false) {
   }).bindPopup(() => popupFor(point), {autoPan: false});
 }
 
+function frpMarker(point, focused = false) {
+  const level = frpLevels.findLast(level => point.frp >= level.min) ?? frpLevels[0];
+  return L.circleMarker([point.lat, point.lon], {
+    radius: level.radius + (focused ? 3 : 0),
+    fillColor: level.color, fillOpacity: focused ? 1 : .8,
+    color: focused ? "#fff" : "#321824", weight: focused ? 3 : 1
+  }).bindPopup(() => popupFor(point), {autoPan: false});
+}
+
+function renderFrpMap() {
+  ensureFrp();
+  const legend = $("legend");
+  legend.replaceChildren(element("span", "Fire radiative power (MW)"));
+  for (const level of frpLevels) {
+    const item = element("span");
+    const dot = element("i", "", "frp-dot");
+    dot.style.setProperty("--frp-color", level.color);
+    dot.setAttribute("aria-hidden", "true");
+    item.append(dot, document.createTextNode(level.label));
+    legend.append(item);
+  }
+  const points = frpData?.points ?? [];
+  const note = frpData?.pending && !points.length ? "Loading measurements…"
+    : frpData?.error || (!points.length ? "No measurements for this selection"
+      : (frpData.offset != null ? "Top " : "") + number.format(points.length) + " measured detections");
+  $("map-scope").textContent = [state.selected && state.selected + " UTC", note].filter(Boolean).join(" · ");
+  for (const point of points.slice().reverse()) {
+    if (point !== focusedFrp) frpMarker(point).addTo(pointLayer);
+  }
+  if (focusedFrp) frpMarker(focusedFrp, true).addTo(focusLayer).openPopup();
+}
+
 function renderMap(points) {
   refreshMapExport();
   pointLayer.clearLayers();
@@ -820,6 +911,10 @@ function renderMap(points) {
   boundary.setLatLngs(areaOutline(activeBounds()));
   boundary.setStyle({opacity: state.backend && !isWorld(activeBounds()) ? 0.85 : 0});
   $("density-map").hidden = $("map-layer").value !== "density";
+  if ($("map-layer").value === "frp") {
+    renderFrpMap();
+    return;
+  }
   if (state.history && $("map-layer").value === "overview") {
     renderOverview(points);
     return;
@@ -931,6 +1026,7 @@ function renderDensity() {
 }
 
 const heatColors = ["#245654", "#4c8e67", "#b8aa52", "#f28c47", "#fc573e"];
+const emberHeatColors = ["#645067", "#9b556d", "#ca5453", "#ee7942", "#ffb45e"];
 
 function renderOverview(points) {
   const legend = $("legend");
@@ -939,7 +1035,8 @@ function renderOverview(points) {
   const maximum = features.reduce((max, {properties: row}) => Math.max(max, row.activity ?? row.observed_cell_days), 1);
   const observed = features.length && features.every(({properties}) => properties.activity == null);
   const metric = observed ? "Observed cell-days" : "Comparable cell-days";
-  const levels = byPercentile ? percentileLevels : heatColors.map((color, index) => ({
+  const palette = document.documentElement.dataset.theme === "ember" ? emberHeatColors : heatColors;
+  const levels = byPercentile ? percentileLevels : palette.map((color, index) => ({
     color,
     label: index ? "≥ " + number.format(Math.expm1(Math.log1p(maximum) * index / heatColors.length)) : "Low"
   }));
@@ -975,7 +1072,7 @@ function renderOverview(points) {
     const activity = row.activity ?? row.observed_cell_days;
     if (!byPercentile && !activity) continue;
     const index = Math.min(heatColors.length - 1, Math.floor(heatColors.length * Math.log1p(activity) / Math.log1p(maximum)));
-    const color = byPercentile ? level.color : heatColors[index];
+    const color = byPercentile ? level.color : palette[index];
     const style = {fillColor: color, fillOpacity: byPercentile ? .24 : .15 + index * .05,
       color, opacity: .45, weight: .65};
     const ring = row.boundary?.map(([x, y]) => [y, x]);
@@ -1011,21 +1108,71 @@ function renderOverview(points) {
   }
 }
 
+function locateDetection(point, ranked) {
+  $("map-layer").value = ranked ? "frp" : "detections";
+  focusedFrp = ranked ? point : null;
+  showTab("map");
+  if (ranked) {
+    map.setView([point.lat, point.lon], Math.max(map.getZoom(), 10), {animate: false});
+  } else {
+    map.panInside([point.lat, point.lon], {padding: [22, 22], animate: false});
+  }
+  render();
+  if (!ranked) mapPoint(point, true).addTo(focusLayer).openPopup();
+  $("map").focus({preventScroll: true});
+  $("map").scrollIntoView({block: "nearest"});
+}
+
+function detailPoints() {
+  return detectionView === "frp" ? frpData?.points ?? [] : visible;
+}
+
+function detailsComplete() {
+  return detectionView === "frp" ? frpData?.offset == null
+    : selectedSensors().every(sensor => state.offsets[sensor] == null);
+}
+
 function renderDetails() {
+  const ranked = detectionView === "frp";
+  if (ranked && state.tab === "detections") ensureFrp();
   const target = $("details");
-  const pages = Math.ceil(visible.length / pageSize);
+  const points = detailPoints();
+  const pages = Math.ceil(points.length / pageSize);
+  const more = ranked && frpData?.offset != null;
+  state.page = Math.min(state.page, Math.max(0, pages - 1));
+  $("download-csv").disabled = $("download-json").disabled = !points.length;
+  $("download-csv").textContent = detailsComplete() ? "Download filtered CSV"
+    : ranked ? "Download loaded CSV" : "Download loaded detections";
+  $("download-json").textContent = detailsComplete() ? "Download filtered JSON" : "Download loaded JSON";
+  $("list-summary").textContent = $("list-summary").dataset.scope +
+    (ranked ? " · Ranked by measured power" : "");
   $("previous").disabled = state.page === 0;
-  $("next").disabled = state.page + 1 >= pages;
-  $("page").textContent = pages ? "Page " + (state.page + 1) + " of " + number.format(pages) : "";
+  $("next").disabled = !!(ranked && frpData?.pending) || (!more && state.page + 1 >= pages) || !pages;
+  $("page").textContent = pages ? "Page " + (state.page + 1) + (more ? "" : " of " + number.format(pages)) : "";
+  if (ranked && frpData?.error) {
+    target.replaceChildren(element("p", frpData.error));
+    const retry = element("button", "Retry");
+    retry.type = "button";
+    retry.onclick = () => {
+      loadFrpPage(frpData);
+      renderDetails();
+    };
+    target.append(retry);
+    $("next").disabled = true;
+    return;
+  }
   if (!pages) {
-    target.replaceChildren(element("p", state.backend
-      ? "No detections to display for this selection." : "Detection data will appear when the backend is connected."));
+    const message = !state.backend ? "Detection data will appear when the backend is connected."
+      : !ranked ? "No detections to display for this selection."
+        : frpData?.pending ? "Loading fire radiative power…" : "No radiative power measurements for this selection.";
+    target.replaceChildren(element("p", message));
     return;
   }
   const table = element("table");
   const header = table.createTHead().insertRow();
   const headings = state.history ? ["Date (UTC)", "Sensor", "Platform", "Processing", "Latitude", "Longitude", "Map"]
     : ["Date (UTC)", "Sensor", "Latitude", "Longitude", "Map"];
+  if (ranked) headings.unshift("Rank", "Fire radiative power (MW)");
   for (const title of headings) {
     const cell = element("th", title);
     cell.scope = "col";
@@ -1033,8 +1180,12 @@ function renderDetails() {
   }
   const body = table.createTBody();
   const first = state.page * pageSize;
-  for (const point of visible.slice(first, first + pageSize)) {
+  for (const [index, point] of points.slice(first, first + pageSize).entries()) {
     const row = body.insertRow();
+    if (ranked) {
+      row.insertCell().textContent = number.format(first + index + 1);
+      row.insertCell().textContent = point.frp.toLocaleString("en-US", {maximumFractionDigits: 10});
+    }
     const attributes = state.history ? [point.satellite, point.processing === "NRT" ? "Provisional" : "Standard"] : [];
     for (const value of [point.date + (point.time ? " " + point.time : ""), point.sensor, ...attributes,
       point.lat.toFixed(4), point.lon.toFixed(4)]) row.insertCell().textContent = value;
@@ -1042,15 +1193,7 @@ function renderDetails() {
     button.type = "button";
     button.setAttribute("aria-label", "Locate " + point.sensor + " point at " +
       point.lat.toFixed(4) + ", " + point.lon.toFixed(4));
-    button.addEventListener("click", () => {
-      if (state.history) $("map-layer").value = "detections";
-      showTab("map");
-      map.panInside([point.lat, point.lon], {padding: [22, 22], animate: false});
-      focusLayer.clearLayers();
-      mapPoint(point, true).addTo(focusLayer).openPopup();
-      $("map").focus({preventScroll: true});
-      $("map").scrollIntoView({block: "nearest"});
-    });
+    button.addEventListener("click", () => locateDetection(point, ranked));
     row.insertCell().append(button);
   }
   target.replaceChildren(table);
@@ -1060,7 +1203,6 @@ function render() {
   const days = state.backend ? [...state.backend.days.keys()].sort().map(backendDay) : [];
   const sensorsShown = selectedSensors();
   visible = state.points.filter(point => sensorsShown.includes(point.sensor));
-  state.page = Math.min(state.page, Math.max(0, Math.ceil(visible.length / pageSize) - 1));
   const bounds = activeBounds().map(value => value.toFixed(2)).join(", ");
   $("area-name").textContent = state.backend?.area || "Study area pending";
   $("area-name").title = state.backend ? "W, S, E, N: " + bounds : "";
@@ -1073,18 +1215,13 @@ function render() {
   const cellsLabel = cells == null ? "Active cells unavailable" : number.format(cells) + " active cells across sensors";
   $("map-scope").textContent = state.history && $("map-layer").value === "cells" && selected
     ? state.selected + " UTC · " + cellsLabel : scope;
-  $("list-summary").textContent = scope + (state.history && selected?.row.provisional_platforms.length ? " · includes provisional" : "");
+  $("list-summary").dataset.scope = scope +
+    (state.history && selected?.row.provisional_platforms.length ? " · includes provisional" : "");
   mapHelp();
   $("provenance").textContent = sourceLabel();
   $("coverage").textContent = state.backend
     ? "Study bounds (west, south, east, north) " + bounds + ". Satellite observation coverage is unknown."
     : "";
-  $("download-csv").disabled = !visible.length;
-  $("download-csv").textContent = state.history && selectedSensors().some(sensor => state.offsets[sensor] != null)
-    ? "Download loaded detections" : "Download filtered CSV";
-  $("download-json").disabled = !visible.length;
-  $("download-json").textContent = selectedSensors().some(sensor => state.offsets[sensor] != null)
-    ? "Download loaded JSON" : "Download filtered JSON";
   $("archive-panel").hidden = !state.history;
   $("percentile-panel").hidden = !state.history && !!state.backend;
   $("jump-to-percentile").hidden = !state.history;
@@ -1127,7 +1264,7 @@ function exportCsv() {
   const archiveColumns = state.history ? ["processing", "eligible_for_index"] : [];
   const rows = [
     ["date_utc", "time_utc", "sensor", "satellite", "latitude", "longitude", "confidence", "frp_mw", ...archiveColumns],
-    ...visible.map(point => [point.date, point.time, point.sensor, point.satellite, point.lat, point.lon,
+    ...detailPoints().map(point => [point.date, point.time, point.sensor, point.satellite, point.lat, point.lon,
       point.confidence, point.frp, ...(state.history ? [point.processing, point.eligible] : [])])
   ];
   return rows.map(row => row.map(csvCell).join(",")).join("\r\n") + "\r\n";
@@ -1225,6 +1362,11 @@ const refreshMapExport = bindDataExport("map-export", selection => {
         date_utc: cell.date, cell: cell.cell, latitude: cell.lat, longitude: cell.lon, platforms: cell.platforms
       }))};
   }
+  if (layer === "frp") {
+    if (!frpData?.points.length) return null;
+    return {name: "fire-radiative-power-" + state.selected, date_utc: state.selected, layer, sensors: included,
+      complete: frpData.offset == null, rows: () => frpData.points.map(detectionRecord)};
+  }
   if (!visible.length) return null;
   const complete = included.every(sensor => state.offsets[sensor] == null);
   return {name: (complete ? "map-detections-" : "map-loaded-detections-") + state.selected,
@@ -1233,16 +1375,18 @@ const refreshMapExport = bindDataExport("map-export", selection => {
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
-  $("theme-toggle").setAttribute("aria-pressed", String(theme === "dark"));
-  $("theme-label").textContent = theme === "dark" ? "Dark" : "Light";
-  $("theme-icon").textContent = theme === "dark" ? "☾" : "☀";
-  if ($("basemap").value !== "satellite") setBasemap(theme);
+  $("theme-select").value = theme;
+  colors.MODIS = theme === "ember" ? "#ffd28a" : "#ffac69";
+  colors.VIIRS = theme === "ember" ? "#9befc2" : "#68dfed";
+  const basemap = theme === "light" ? "light" : "dark";
+  if ($("basemap").value !== "satellite") setBasemap(basemap);
+  else geography?.setStyle(basemapStyle("satellite"));
   if (state.backend && state.tab === "map") renderMap(visible);
-  window.dispatchEvent(new CustomEvent("hotspot:theme", {detail: theme}));
+  window.dispatchEvent(new CustomEvent("hotspot:theme", {detail: basemap}));
 }
 
-$("theme-toggle").addEventListener("click", () => {
-  const theme = document.documentElement.dataset.theme === "light" ? "dark" : "light";
+$("theme-select").addEventListener("change", event => {
+  const theme = event.target.value;
   try {
     localStorage.setItem("hotspot-theme", theme);
   } catch {}
@@ -1252,8 +1396,8 @@ $("theme-toggle").addEventListener("click", () => {
 $("download-csv").addEventListener("click", () => downloadFile(exportCsv(), "text/csv;charset=utf-8", "detections.csv"));
 $("download-json").addEventListener("click", () => downloadFile(JSON.stringify({
   date_utc: state.selected, bbox: activeBounds(), data_version: state.backend.data_version,
-  sensors: selectedSensors(), complete: selectedSensors().every(sensor => state.offsets[sensor] == null),
-  detections: visible
+  sensors: selectedSensors(), complete: detailsComplete(),
+  detections: detailPoints()
 }, null, 2), "application/json", "detections-" + state.selected + ".json"));
 
 $("retry-data").addEventListener("click", () => {
@@ -1262,6 +1406,7 @@ $("retry-data").addEventListener("click", () => {
 });
 $("fetch-next").addEventListener("click", loadMoreMap);
 $("map-layer").addEventListener("change", () => {
+  focusedFrp = null;
   updateDensity();
   render();
   loadOverview(state.history?.rows.find(row => row.date_utc === state.month));
@@ -1319,7 +1464,9 @@ $("open-month-map").addEventListener("click", () => {
 $("fit-area").addEventListener("click", fitArea);
 for (const button of document.querySelectorAll("[data-sensor]")) {
   button.addEventListener("click", () => {
+    if (state.sensor === button.dataset.sensor) return;
     state.sensor = button.dataset.sensor;
+    resetFrp();
     state.page = 0;
     render();
   });
@@ -1331,7 +1478,36 @@ $("calendar").addEventListener("click", event => {
   $("calendar").querySelector('[data-date="' + date + '"]')?.focus({preventScroll: true});
 });
 $("previous").addEventListener("click", () => { state.page--; renderDetails(); });
-$("next").addEventListener("click", () => { state.page++; renderDetails(); });
+$("next").addEventListener("click", () => {
+  if (detectionView === "frp" && state.page + 1 >= Math.ceil(frpData.points.length / pageSize)) {
+    loadFrpPage(frpData, state.page);
+    renderDetails();
+    return;
+  }
+  state.page++;
+  renderDetails();
+});
+
+const detectionTabs = ["list", "frp"].map(view => $("detection-" + view + "-tab"));
+for (const [index, button] of detectionTabs.entries()) {
+  button.addEventListener("click", () => {
+    detectionView = index === 0 ? "list" : "frp";
+    state.page = 0;
+    for (const tab of detectionTabs) {
+      tab.setAttribute("aria-selected", String(tab === button));
+      tab.tabIndex = tab === button ? 0 : -1;
+    }
+    $("detection-list-panel").setAttribute("aria-labelledby", button.id);
+    renderDetails();
+  });
+  button.addEventListener("keydown", event => {
+    const target = {ArrowLeft: 1 - index, ArrowRight: 1 - index, Home: 0, End: 1}[event.key];
+    if (target == null) return;
+    event.preventDefault();
+    detectionTabs[target].focus();
+    detectionTabs[target].click();
+  });
+}
 
 const tabs = ["map", "detections", "compare", "history"];
 const openFilters = new Map();
@@ -1390,6 +1566,7 @@ function showTab(tab, focusTab = false) {
     }
   }
   if (tab === "compare") window.dispatchEvent(new Event("hotspot:compare"));
+  if (tab === "detections") renderDetails();
   $("fetch-next").hidden = !state.history || !nextMapKeys().length;
   $("fetch-next").textContent = tab === "map" && $("map-layer").value === "cells"
     ? "Load more active cells" : "Load more detections";

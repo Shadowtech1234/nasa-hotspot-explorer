@@ -6,10 +6,14 @@ detection points on translucent activity cells. History includes an ISO-week hea
 harmonized monthly calendar, and the monthly percentile chart. Compare shows
 sensor trends and synchronized maps. Choose a trend period and select
 **Show on sensor maps** to inspect that period on both maps. Opening-week data
-appears while the full selected date range loads. Analysis includes seasonal totals,
-daily fire radiative power. Every view has CSV and JSON downloads for its data.
-The theme control in the header switches between light and dark and remembers
-the choice in the browser.
+appears while the full selected date range loads. Analysis includes seasonal totals
+and daily fire radiative power. Under **Detections**, choose **Fire radiative power**
+to rank measurements in MW for the selected date, area, and sensors. **Locate**
+opens the power map and highlights the selected detection. Every view has CSV
+and JSON downloads for its data.
+
+The header theme selector offers **Forest Dark**, **Original Light**, and
+**Ember Console**. Forest Dark is the default. The browser remembers your choice.
 
 Run the [archive setup](../backend/howtotest.md) to serve the app and data on the
 same origin. The five-day demo supports daily detections, density, sensor

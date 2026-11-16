@@ -7,25 +7,30 @@
   <title>Satellite Fire Explorer</title>
   <script>
     try {
-      document.documentElement.dataset.theme = localStorage.getItem("hotspot-theme") === "light" ? "light" : "dark";
+      const theme = localStorage.getItem("hotspot-theme");
+      document.documentElement.dataset.theme = ["light", "ember"].includes(theme) ? theme : "dark";
     } catch {}
   </script>
   <link rel="stylesheet" href="assets/leaflet.css">
-  <link rel="stylesheet" href="styles.css?v=2">
+  <link rel="stylesheet" href="styles.css?v=3">
   <script defer src="assets/leaflet.js"></script>
   <script defer src="static-data.js"></script>
-  <script defer src="static-api.js"></script>
-  <script defer src="app.js?v=2"></script>
-  <script defer src="compare.js?v=2"></script>
+  <script defer src="static-api.js?v=3"></script>
+  <script defer src="app.js?v=3"></script>
+  <script defer src="compare.js?v=3"></script>
   <script defer src="analytics.js?v=2"></script>
 </head>
 <body>
   <a class="skip" href="#workspace">Skip to explorer</a>
   <header class="top">
-    <a class="identity" href="#workspace"><span class="mark" aria-hidden="true"></span><span>Fire Explorer</span></a>
-    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Dark mode" aria-pressed="true">
-      <span id="theme-icon" aria-hidden="true">☾</span><span id="theme-label" aria-hidden="true">Dark</span>
-    </button>
+    <a class="identity" href="#workspace"><span class="mark" aria-hidden="true"></span><span>Fire Signal</span></a>
+    <label class="theme-control">Theme
+      <select id="theme-select">
+        <option value="dark">Forest Dark</option>
+        <option value="light">Original Light</option>
+        <option value="ember">Ember Console</option>
+      </select>
+    </label>
   </header>
   <main id="workspace">
     <div class="intro">
@@ -57,7 +62,7 @@
             <div><h2 id="map-title">Hotspot map</h2><p id="map-scope"></p></div>
             <div class="map-tools">
               <a id="calendar-shortcut" href="#calendar-title">Calendar</a>
-              <label id="map-layer-control" class="basemap-label" hidden>Layer <select id="map-layer"><option value="overview">Monthly activity</option><option value="density">Detection density</option><option value="cells">Active cells</option><option value="detections">Raw detections</option></select></label>
+              <label id="map-layer-control" class="basemap-label" hidden>Layer <select id="map-layer"><option value="overview">Monthly activity</option><option value="density">Detection density</option><option value="cells">Active cells</option><option value="detections">Raw detections</option><option value="frp">Fire radiative power</option></select></label>
               <label id="overview-metric-control" class="basemap-label" hidden>Color by <select id="overview-metric"><option value="activity">Activity</option><option value="percentile">Percentile</option></select></label>
               <label class="basemap-label">Basemap <select id="basemap"><option value="dark" selected>Dark</option><option value="light">Light</option><option value="satellite">Satellite</option></select></label>
               <button id="fit-area" type="button">Fit area</button>
@@ -189,8 +194,14 @@
       </section>
       <section class="detail-panel" aria-labelledby="detail-title">
         <div class="panel-heading"><div><h2 id="detail-title">Detections</h2><p id="list-summary"></p></div><div class="actions"><button id="download-csv" type="button" disabled>Download filtered CSV</button><button id="download-json" type="button" disabled>Download filtered JSON</button></div></div>
-        <div id="details"></div>
-        <div class="pagination"><button id="previous" type="button">Previous</button><span id="page"></span><button id="next" type="button">Next</button></div>
+        <div class="segments detection-views" role="tablist" aria-label="Detection table view">
+          <button id="detection-list-tab" type="button" role="tab" aria-selected="true" aria-controls="detection-list-panel">All detections</button>
+          <button id="detection-frp-tab" type="button" role="tab" aria-selected="false" aria-controls="detection-list-panel" tabindex="-1">Fire radiative power</button>
+        </div>
+        <div id="detection-list-panel" role="tabpanel" aria-labelledby="detection-list-tab">
+          <div id="details"></div>
+          <div class="pagination"><button id="previous" type="button">Previous</button><span id="page"></span><button id="next" type="button">Next</button></div>
+        </div>
       </section>
       <details class="sources">
       <summary>Data &amp; methods</summary>
