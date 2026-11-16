@@ -12,7 +12,7 @@
   </script>
   <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon.png">
   <link rel="stylesheet" href="assets/leaflet.css">
-  <link rel="stylesheet" href="styles.css?v=3">
+  <link rel="stylesheet" href="styles.css?v=4">
   <script defer src="assets/leaflet.js"></script>
   <script defer src="static-data.js"></script>
   <script defer src="static-api.js"></script>
@@ -20,15 +20,38 @@
   <script defer src="compare.js?v=2"></script>
   <script defer src="analytics.js?v=2"></script>
   <script defer src="firms-import.js"></script>
+  <script defer src="tour.js"></script>
 </head>
 <body>
   <a class="skip" href="#workspace">Skip to explorer</a>
   <header class="top">
     <a class="identity" href="#workspace"><span class="mark" aria-hidden="true"></span><span>FireSignal</span></a>
-    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Dark mode" aria-pressed="true">
-      <span id="theme-icon" aria-hidden="true">☾</span><span id="theme-label" aria-hidden="true">Dark</span>
-    </button>
+    <div class="header-actions">
+      <button id="tour-launch" type="button" aria-controls="explorer-tour" aria-expanded="false" hidden>Take a tour</button>
+      <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Dark mode" aria-pressed="true">
+        <span id="theme-icon" aria-hidden="true">☾</span><span id="theme-label" aria-hidden="true">Dark</span>
+      </button>
+    </div>
   </header>
+  <aside id="explorer-tour" class="explorer-tour" aria-labelledby="tour-title" hidden>
+    <div class="tour-top">
+      <p id="tour-step" class="tour-step"></p>
+      <button id="tour-skip" class="tour-text-button" type="button">Skip tour</button>
+    </div>
+    <progress id="tour-progress" aria-hidden="true"></progress>
+    <div class="tour-content">
+      <h2 id="tour-title" tabindex="-1" aria-describedby="tour-step tour-description"></h2>
+      <p id="tour-description"></p>
+      <p id="tour-note" class="tour-note" hidden></p>
+      <button id="tour-import" class="tour-text-button" type="button" hidden>Go to CSV import</button>
+      <a id="tour-firms-download" href="https://firms.modaps.eosdis.nasa.gov/download/" target="_blank" rel="noopener" hidden>NASA FIRMS downloads (opens in a new tab)</a>
+    </div>
+    <div class="tour-actions">
+      <button id="tour-explore" class="tour-text-button" type="button"></button>
+      <button id="tour-back" type="button">Back</button>
+      <button id="tour-next" class="primary" type="button">Next</button>
+    </div>
+  </aside>
   <main id="workspace">
     <div class="intro">
       <h1>Satellite Fire Explorer</h1>
@@ -107,7 +130,7 @@
     </section>
     <section id="history-panel" role="tabpanel" aria-labelledby="history-tab" hidden>
       <section class="workspace-card" aria-labelledby="weekly-title">
-        <div class="panel-heading"><div><h2 id="weekly-title">Weekly burning activity</h2><p>Observed active cell-days · Monday–Sunday, UTC</p><p id="weekly-mode" role="status"></p></div><a id="jump-to-percentile" href="#percentile-title" hidden>Monthly percentile ↓</a></div>
+        <div class="panel-heading"><div><h2 id="weekly-title" tabindex="-1">Weekly burning activity</h2><p>Observed active cell-days · Monday–Sunday, UTC</p><p id="weekly-mode" role="status"></p></div><a id="jump-to-percentile" href="#percentile-title" hidden>Monthly percentile ↓</a></div>
         <div class="history-grid">
           <div id="weekly-heatmap" class="weekly-heatmap"></div>
           <div id="week-detail" class="week-detail"></div>
@@ -203,7 +226,7 @@
     <section id="detections-panel" role="tabpanel" aria-labelledby="detections-tab" hidden>
       <section class="workspace-card" aria-labelledby="detection-charts-title">
         <div class="panel-heading">
-          <div><h2 id="detection-charts-title">Detection analysis</h2><p id="detection-analysis-scope"></p></div>
+          <div><h2 id="detection-charts-title" tabindex="-1">Detection analysis</h2><p id="detection-analysis-scope"></p></div>
           <label class="filter">Observation date (UTC)<select id="analysis-date" disabled></select></label>
         </div>
         <div id="detection-metrics" class="analysis-metrics"></div>
