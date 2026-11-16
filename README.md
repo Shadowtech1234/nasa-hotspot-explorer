@@ -29,30 +29,6 @@ Satellite data can show where fire activity was detected, but raw records are di
 - **HTML, CSS, and JavaScript** for the browser interface
 - **NASA FIRMS** for MODIS and Suomi-NPP VIIRS fire detection data
 
-## Run locally
-
-The repository includes a prepared Western U.S. demo archive covering January 2019 through December 2024. You don’t need a FIRMS API key to run it.
-
-From the repository root, install the dependencies with Python 3.10 or later:
-
-```bash
-python -m pip install -r backend/requirements.txt
-```
-
-On Windows PowerShell:
-
-```powershell
-$env:FIRMS_OUTPUT_DIR = "backend/deploy-data/western-us"
-python -m uvicorn backend.api:app --host 127.0.0.1 --port 8765
-```
-
-On macOS or Linux:
-
-```bash
-FIRMS_OUTPUT_DIR=backend/deploy-data/western-us python -m uvicorn backend.api:app --host 127.0.0.1 --port 8765
-```
-
-Open [Fire Signal locally](http://127.0.0.1:8765/).
 
 ## Data credits
 
