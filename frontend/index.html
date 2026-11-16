@@ -4,81 +4,156 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="Explore and compare NASA FIRMS active fire detections by area, sensor, and date.">
-  <title>Hotspot Explorer | NASA Space Apps project</title>
+  <title>Satellite Fire Explorer</title>
+  <script>
+    try {
+      document.documentElement.dataset.theme = localStorage.getItem("hotspot-theme") === "light" ? "light" : "dark";
+    } catch {}
+  </script>
   <link rel="stylesheet" href="assets/leaflet.css">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=2">
   <script defer src="assets/leaflet.js"></script>
-  <script defer src="assets/leaflet-heat-global.js"></script>
   <script defer src="static-data.js"></script>
-  <script defer src="monthly.js"></script>
-  <script defer src="app.js"></script>
-  <script defer src="compare.js"></script>
+  <script defer src="static-api.js"></script>
+  <script defer src="app.js?v=2"></script>
+  <script defer src="compare.js?v=2"></script>
+  <script defer src="analytics.js?v=2"></script>
 </head>
 <body>
   <a class="skip" href="#workspace">Skip to explorer</a>
   <header class="top">
-    <a class="identity" href="#workspace"><span class="mark" aria-hidden="true"></span><span>Hotspot Explorer</span></a>
-    <a class="challenge" href="https://www.spaceappschallenge.org/2026/challenges/modis-and-viirs-hot-spots/">NASA Space Apps <span aria-hidden="true">↗</span></a>
+    <a class="identity" href="#workspace"><span class="mark" aria-hidden="true"></span><span>Fire Explorer</span></a>
+    <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Dark mode" aria-pressed="true">
+      <span id="theme-icon" aria-hidden="true">☾</span><span id="theme-label" aria-hidden="true">Dark</span>
+    </button>
   </header>
   <main id="workspace">
     <div class="intro">
-      <h1>Burning activity explorer</h1>
+      <h1>Satellite Fire Explorer</h1>
       <div class="tabs" role="tablist" aria-label="Explorer views">
         <button id="map-tab" type="button" role="tab" aria-controls="map-panel" aria-selected="true">Map &amp; Calendar</button>
+        <button id="detections-tab" type="button" role="tab" aria-controls="detections-panel" aria-selected="false" tabindex="-1">Analysis</button>
         <button id="compare-tab" type="button" role="tab" aria-controls="compare-panel" aria-selected="false" tabindex="-1">Compare</button>
-        <button id="detections-tab" type="button" role="tab" aria-controls="detections-panel" aria-selected="false" tabindex="-1">Detections</button>
+        <button id="history-tab" type="button" role="tab" aria-controls="history-panel" aria-selected="false" tabindex="-1">History</button>
       </div>
     </div>
-    <section id="explorer-filters" class="filters" aria-label="Explorer filters">
-      <div class="filter" id="sensor-control"><span class="caption">Sensor</span><div class="segments" role="group" aria-label="Sensor">
-        <button type="button" data-sensor="both" aria-pressed="true">Both</button><button type="button" data-sensor="MODIS" aria-pressed="false">MODIS</button><button type="button" data-sensor="VIIRS" aria-pressed="false">VIIRS</button>
-      </div></div>
-      <div class="filter"><span class="caption">Study area</span><span id="area-name" class="subtle"></span></div>
-      <form id="date-range" class="dates">
-        <label class="filter"><span class="caption">From (UTC)</span><input id="date-start" type="date" required></label>
-        <label class="filter"><span class="caption">Through (UTC)</span><input id="date-end" type="date" required></label>
-        <button id="apply-dates" type="submit">Apply dates</button>
-      </form>
-      <p id="published-dates" class="subtle"></p>
-    </section>
-    <div class="actions">
-      <p id="status" class="status" role="status">Loading the published dataset…</p>
+    <div id="view-filters" hidden></div>
+    <div class="actions data-status">
+      <p id="status" class="status" role="status">Loading the detection calendar…</p>
       <button id="retry-data" type="button">Reload data</button>
+      <button id="fetch-next" type="button" hidden>Load more map records</button>
     </div>
     <section id="map-panel" role="tabpanel" aria-labelledby="map-tab">
-      <section class="map-panel" aria-labelledby="map-title">
-        <div class="panel-heading map-heading">
-          <div><h2 id="map-title">Hotspot map</h2><p id="map-scope"></p></div>
-          <div class="map-tools">
-            <label class="basemap-label">View <select id="map-mode"><option value="detections">Detections</option><option value="monthly" disabled>Monthly activity</option></select></label>
-            <label class="basemap-label">Basemap <select id="basemap"><option value="satellite">Satellite</option><option value="simple">Simple</option></select></label>
-            <button id="draw-area" type="button" aria-pressed="false">Draw box</button>
-            <button id="clear-box" type="button" hidden>Clear box</button>
-            <button id="fit-area" type="button">Zoom to data</button>
-            <button id="resize-map" type="button" aria-pressed="false">Larger map</button>
+      <div id="map-workspace">
+        <div id="map-calendars">
+          <div id="map-calendar"></div>
+          <section class="calendar-panel" aria-labelledby="calendar-title">
+            <div class="panel-heading"><div><h2 id="calendar-title" tabindex="-1">Daily observations</h2><p>UTC dates · 0 no detections · ? source unavailable</p></div></div>
+            <div id="calendar" class="calendar"></div>
+          </section>
+        </div>
+        <section class="map-panel" aria-labelledby="map-title">
+          <div class="panel-heading map-heading">
+            <div><h2 id="map-title">Hotspot map</h2><p id="map-scope"></p></div>
+            <div class="map-tools">
+              <a id="calendar-shortcut" href="#calendar-title">Calendar</a>
+              <label id="map-layer-control" class="basemap-label" hidden>Layer <select id="map-layer"><option value="overview">Monthly activity</option><option value="density">Detection density</option><option value="cells">Active cells</option><option value="detections">Raw detections</option></select></label>
+              <label id="overview-metric-control" class="basemap-label" hidden>Color by <select id="overview-metric"><option value="activity">Activity</option><option value="percentile">Percentile</option></select></label>
+              <label class="basemap-label">Basemap <select id="basemap"><option value="dark" selected>Dark</option><option value="light">Light</option><option value="satellite">Satellite</option></select></label>
+              <button id="fit-area" type="button">Fit area</button>
+              <button id="resize-map" type="button" aria-pressed="false">Larger map</button>
+            </div>
           </div>
+          <div class="map-stage">
+            <div id="map" role="region" aria-label="Interactive hotspot map" aria-describedby="map-help" tabindex="0"></div>
+            <canvas id="density-map" aria-hidden="true" hidden></canvas>
+          </div>
+          <div class="map-footer"><div id="legend" class="legend"></div><p id="map-help" class="map-help"></p></div>
+          <form id="map-export" class="export-controls" aria-label="Export map data">
+            <label>Data <select name="dataset"><option value="layer">Current map layer</option><option value="points">Fire detection points</option><option value="daily">Daily calendar</option></select></label>
+            <label>Format <select name="format"><option value="csv">CSV</option><option value="json">JSON</option></select></label>
+            <button type="submit" disabled>Export</button>
+          </form>
+        </section>
+        <details id="explorer-filters" class="workspace-card" open>
+          <summary>Area and dates</summary>
+          <div class="filter" id="sensor-control"><span class="caption">Detection sensor</span><div class="segments" role="group" aria-label="Detection sensor">
+            <button type="button" data-sensor="both" aria-pressed="true">Both</button><button type="button" data-sensor="MODIS" aria-pressed="false">MODIS</button><button type="button" data-sensor="VIIRS" aria-pressed="false">VIIRS</button>
+          </div></div>
+          <div class="filter"><span class="caption">Study area</span><strong id="area-name"></strong></div>
+          <form id="archive-selection" class="selection-fields" hidden>
+            <label class="filter" id="archive-choice" hidden>Archive <select id="archive-dataset"></select></label>
+            <label class="filter">Find a country or region
+              <input id="area-search" type="search" list="area-options" placeholder="Search areas" aria-describedby="archive-bounds-help">
+            </label>
+            <datalist id="area-options"></datalist>
+            <button id="draw-area" type="button" aria-pressed="false">Draw on map</button>
+            <label class="filter" for="archive-bounds">Bounds (west, south, east, north)
+              <input id="archive-bounds" name="bbox" required aria-describedby="archive-bounds-help">
+            </label>
+            <p id="archive-bounds-help" class="subtle">Search for an area or draw on the map to fill these coordinates.</p>
+            <div class="selection-dates">
+              <label class="filter">From (UTC) <input id="archive-start" type="date" required></label>
+              <label class="filter">Through (UTC) <input id="archive-end" type="date" required></label>
+            </div>
+            <div class="actions"><button class="primary" type="submit">Apply selection</button><button id="archive-reset" type="button">Reset</button></div>
+          </form>
+          <p id="map-selection-summary" class="subtle"></p>
+        </details>
+      </div>
+      <div id="map-percentiles"></div>
+    </section>
+    <section id="history-panel" role="tabpanel" aria-labelledby="history-tab" hidden>
+      <section class="workspace-card" aria-labelledby="weekly-title">
+        <div class="panel-heading"><div><h2 id="weekly-title">Weekly burning activity</h2><p>Observed active cell-days · Monday–Sunday, UTC</p><p id="weekly-mode" role="status"></p></div><a id="jump-to-percentile" href="#percentile-title" hidden>Monthly percentile ↓</a></div>
+        <div class="history-grid">
+          <div id="weekly-heatmap" class="weekly-heatmap"></div>
+          <div id="week-detail" class="week-detail"></div>
         </div>
-        <div id="monthly-controls" class="map-footer" hidden>
-          <label class="basemap-label">Published region <select id="monthly-region"></select></label>
-          <span class="subtle">Combined sensors</span>
+        <form id="history-export" class="export-controls" aria-label="Export historical data">
+          <label>Data <select name="dataset"><option value="weekly">Weekly activity</option><option value="monthly">Monthly activity and percentiles</option></select></label>
+          <label>Format <select name="format"><option value="csv">CSV</option><option value="json">JSON</option></select></label>
+          <button type="submit" disabled>Export</button>
+        </form>
+      </section>
+      <div id="history-calendar"></div>
+      <div id="history-percentiles"></div>
+    </section>
+    <section id="archive-panel" class="archive-panel" aria-labelledby="archive-title" hidden>
+        <div class="panel-heading">
+          <div><h2 id="archive-title" tabindex="-1">Monthly burning calendar</h2><p>Suomi-NPP-equivalent active cell-days, by UTC month</p></div>
+          <div class="actions"><label class="filter">Calendar year <select id="archive-year"></select></label><button id="open-month-map" type="button">View month on map</button></div>
         </div>
-        <div id="map" role="region" aria-label="Interactive hotspot map" aria-describedby="map-help" tabindex="0"></div>
-        <div class="map-footer"><div id="legend" class="legend"></div><p id="map-help" class="map-help"></p></div>
-      </section>
-      <section id="monthly-panel" class="calendar-panel" aria-labelledby="monthly-title" hidden>
-        <div class="panel-heading"><div><h2 id="monthly-title">Monthly activity calendar</h2><p>Combined sensor activity in cell-days</p></div></div>
-        <div id="monthly-calendar" class="monthly-calendar"></div>
-      </section>
-      <section id="daily-panel" class="calendar-panel" aria-labelledby="calendar-title">
-        <div class="panel-heading"><div><h2 id="calendar-title">Burning activity calendar</h2><p>Detection counts by UTC day · 0 no detections · * partial coverage · ? source unavailable</p></div></div>
-        <div id="calendar" class="calendar"></div>
-      </section>
+        <div id="archive-months" class="archive-months"></div>
+        <details class="month-details">
+          <summary>Month details</summary>
+          <p id="archive-month-summary" class="subtle" aria-live="polite"></p>
+          <p id="archive-peak" class="subtle"></p>
+        </details>
+    </section>
+    <section id="percentile-panel" class="workspace-card percentile-panel" aria-labelledby="percentile-title">
+      <h2 id="percentile-title" tabindex="-1">Monthly percentile</h2>
+      <p class="subtle">Compared with the same month in earlier years for this area. Gaps indicate insufficient history.</p>
+      <div id="percentile-chart"><p class="subtle">Loading monthly percentiles…</p></div>
     </section>
     <section id="compare-panel" role="tabpanel" aria-labelledby="compare-tab" hidden>
+      <section class="workspace-card" aria-labelledby="trend-title">
+        <div class="panel-heading">
+          <div><h2 id="trend-title">MODIS and VIIRS over time</h2><p id="trend-caption">Raw detection counts and reporting coverage</p></div>
+          <form id="trend-export" class="export-controls" aria-label="Export sensor trends">
+            <label>Format <select name="format"><option value="csv">CSV</option><option value="json">JSON</option></select></label>
+            <button type="submit" disabled>Export trends</button>
+          </form>
+        </div>
+        <div id="sensor-trend" class="chart-scroll"></div>
+        <p id="trend-detail" class="subtle" aria-live="polite"></p>
+        <details class="inline-method"><summary>Calibration and validation</summary><div id="calibration" class="subtle"></div></details>
+      </section>
       <section class="compare-card" aria-labelledby="sensor-title">
         <div class="compare-header">
-          <div><h3 id="sensor-title">One area, two sensors</h3><p id="sensor-scope"></p></div>
+          <div><h3 id="sensor-title" tabindex="-1">Compare detections on the map</h3><p id="sensor-scope"></p></div>
           <div class="actions"><label class="filter">Observation date (UTC)<select id="compare-date" disabled></select></label>
+            <label class="filter">Basemap<select id="compare-basemap"><option value="dark">Dark</option><option value="light">Light</option><option value="satellite">Satellite</option></select></label>
             <button id="compare-fit" type="button">Fit study area</button></div>
         </div>
         <div id="compare-mobile" class="segments" role="group" aria-label="Sensor shown on map">
@@ -98,11 +173,22 @@
       </section>
     </section>
     <section id="detections-panel" role="tabpanel" aria-labelledby="detections-tab" hidden>
+      <section class="workspace-card" aria-labelledby="detection-charts-title">
+        <div class="panel-heading">
+          <div><h2 id="detection-charts-title">Detection analysis</h2><p id="detection-analysis-scope"></p></div>
+          <label class="filter">Observation date (UTC)<select id="analysis-date" disabled></select></label>
+        </div>
+        <div id="detection-metrics" class="analysis-metrics"></div>
+        <div class="analysis-grid">
+          <div><h3 id="season-title">Seasonal detections</h3><div id="season-chart" class="chart-scroll"></div></div>
+          <div><h3>Fire radiative power (MW)</h3><div id="frp-chart" class="chart-scroll"></div></div>
+        </div>
+      </section>
       <section class="data-controls" aria-labelledby="data-title">
         <div><h2 id="data-title">Data source</h2><p id="provenance"></p></div>
       </section>
       <section class="detail-panel" aria-labelledby="detail-title">
-        <div class="panel-heading"><div><h2 id="detail-title">Detections</h2><p id="list-summary"></p></div><button id="download-csv" type="button" disabled>Download filtered CSV</button></div>
+        <div class="panel-heading"><div><h2 id="detail-title">Detections</h2><p id="list-summary"></p></div><div class="actions"><button id="download-csv" type="button" disabled>Download filtered CSV</button><button id="download-json" type="button" disabled>Download filtered JSON</button></div></div>
         <div id="details"></div>
         <div class="pagination"><button id="previous" type="button">Previous</button><span id="page"></span><button id="next" type="button">Next</button></div>
       </section>
@@ -110,7 +196,8 @@
       <summary>Data &amp; methods</summary>
       <p id="coverage"></p>
       <p>Raw counts are satellite observations of thermal anomalies. Repeated observations may refer to the same fire. MODIS and VIIRS have different resolutions and overpass times. Clouds, smoke, and gaps between overpasses can hide activity.</p>
-      <p>An asterisk means the count covers only part of the selected area. A question mark means the source is unavailable. An unmarked zero means the available source reported no detections in the selected area that day.</p>
+      <p>A zero means the available source reported no detections in the study area on that day. A question mark means the source is unavailable.</p>
+      <p id="archive-method" hidden>The calendar counts an H3 cell once for each UTC day with eligible activity. Monthly estimates convert standard-processing observations to a common Suomi-NPP scale. Recent provisional detections appear in the raw map and table. <a href="/api/validation">Calibration results</a></p>
       <p><a href="https://firms.modaps.eosdis.nasa.gov/download/">NASA FIRMS archive</a> · <a href="https://forum.earthdata.nasa.gov/viewtopic.php?t=5178">NASA detection guidance</a> · <a href="https://www.naturalearthdata.com/">Natural Earth basemap</a></p>
     </details>
     </section>

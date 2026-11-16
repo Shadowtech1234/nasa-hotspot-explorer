@@ -59,7 +59,7 @@ def build_cells(db, output, raw):
 
 
 def insert_days(db, days):
-    # Bind one document so DuckDB can convert the date coverage in bulk.
+    # Bind one document so DuckDB can convert coverage in bulk.
     db.execute("""
         CREATE TEMP TABLE days AS SELECT key::DATE AS date_utc,
             (value->>'sp')::INTEGER AS sp, (value->>'nrt')::INTEGER AS nrt,
@@ -225,6 +225,21 @@ def month_end(month):
     return date(year + (number == 12), number % 12 + 1, 1)
 
 
+SENSOR_MASKS = {"MODIS": MODIS, "VIIRS": 28}
+FRP_LABELS = ("0–<10", "10–<50", "50–<100", "100–<500", "500+")
+
+
+def frp_summary(values):
+    bins = [0] * len(FRP_LABELS)
+    total = count = 0
+    for value in values:
+        if value is not None:
+            bins[sum(value >= threshold for threshold in (10, 50, 100, 500))] += 1
+            total += value
+            count += 1
+    return {"bins": bins, "sample_count": count, "mean_mw": total / count if count else None}
+
+
 class History:
     def __init__(self, output, manifest):
         self.output = output
@@ -292,7 +307,7 @@ class History:
                 availability = info["available"] | info["nrt"]
                 row["sensor_detections"] = {
                     sensor: raw.get((day, sensor), 0) if (day, sensor) in raw or availability & mask else None
-                    for sensor, mask in (("MODIS", MODIS), ("VIIRS", 28))
+                    for sensor, mask in SENSOR_MASKS.items()
                 }
             rows.append(row)
         return rows
@@ -368,6 +383,85 @@ class History:
         if month.day != 1 or not self.start <= start < end <= self.end or start.strftime("%Y-%m") != month.strftime("%Y-%m") or end > month_end(month.strftime("%Y-%m")):
             raise ValueError("Select a date interval inside one archive month")
         return overview_regions(self, bbox, month, start, end, resolution)
+
+    @lru_cache(maxsize=8)
+    def analytics(self, bbox, start, end):
+        if not self.start <= start < end <= self.end:
+            raise ValueError("Date range lies outside this archive release or is empty")
+        days = {day.isoformat(): self.days[day.isoformat()] for day in date_range(start, end)}
+        paths = [self.manifest["cells"][month] for month in sorted({day[:7] for day in days})
+                 if month in self.manifest["cells"]]
+        cells = {}
+        with connect(self.output) as db:
+            insert_days(db, days)
+            raw = self.raw_counts(db, days, bbox)
+            if paths:
+                bounds, params = bbox_filter(bbox, "cell_lon", "cell_lat")
+                cells = dict(db.execute(f"""
+                    SELECT c.date_utc, count(*) FROM read_parquet(?) c JOIN days d USING (date_utc)
+                    WHERE {bounds} GROUP BY c.date_utc
+                """, [partitions(self.output, paths), *params]).fetchall())
+        weeks, months = {}, {}
+        for key, info in days.items():
+            day = parse_day(key)
+            monday = day - timedelta(days=day.weekday())
+            year, week, _ = day.isocalendar()
+            bucket = weeks.setdefault(monday, {"week_start": monday.isoformat(), "year": year, "week": week,
+                                                "available_days": 0, "observed_cell_days": None, "days": []})
+            value = cells.get(day, 0) if day in cells or info["available"] else None
+            bucket["days"].append({"date_utc": key, "observed_cell_days": value})
+            if value is not None:
+                bucket["available_days"] += 1
+                bucket["observed_cell_days"] = (bucket["observed_cell_days"] or 0) + value
+            month = months.setdefault(key[:7], {"month": key[:7], "selected_days": 0,
+                                                "sensors": {sensor: {"count": None, "reporting_days": 0}
+                                                            for sensor in SENSOR_MASKS}})
+            month["selected_days"] += 1
+            for sensor, mask in SENSOR_MASKS.items():
+                if (key, sensor) in raw or (info["available"] | info["nrt"]) & mask:
+                    stat = month["sensors"][sensor]
+                    stat["reporting_days"] += 1
+                    stat["count"] = (stat["count"] or 0) + raw.get((key, sensor), 0)
+        return {**self.metadata(bbox), "start": start.isoformat(), "end_exclusive": end.isoformat(),
+                "weeks": list(weeks.values()), "months": list(months.values())}
+
+    def daily_frp(self, day, bbox):
+        paths = self.manifest["raw"].get(day[:7], [])
+        stats = {sensor: frp_summary(()) for sensor in SENSOR_MASKS}
+        if not paths:
+            return stats
+        bounds, params = bbox_filter(bbox, "longitude", "latitude")
+        with connect(self.output) as db:
+            rows = db.execute(f"""
+                SELECT sensor, count(frp_mw), avg(frp_mw), count(*) FILTER (WHERE frp_mw < 10),
+                       count(*) FILTER (WHERE frp_mw >= 10 AND frp_mw < 50),
+                       count(*) FILTER (WHERE frp_mw >= 50 AND frp_mw < 100),
+                       count(*) FILTER (WHERE frp_mw >= 100 AND frp_mw < 500),
+                       count(*) FILTER (WHERE frp_mw >= 500)
+                FROM read_parquet(?) WHERE date_utc = ?::DATE
+                  AND (processing = 'SP' OR platform_mask & ? <> 0) AND {bounds}
+                GROUP BY sensor
+            """, [partitions(self.output, paths), day, self.days[day]["nrt"], *params]).fetchall()
+        for sensor, count, mean, *bins in rows:
+            stats[sensor] = {"sample_count": count, "mean_mw": mean, "bins": bins}
+        return stats
+
+    def daily_density(self, day, bbox, step):
+        paths = self.manifest["raw"].get(day[:7], [])
+        features = []
+        if paths:
+            bounds, params = bbox_filter(bbox, "longitude", "latitude")
+            with connect(self.output) as db:
+                rows = db.execute(f"""
+                    SELECT floor(longitude / ?) AS x, floor(latitude / ?) AS y, sensor, count(*)
+                    FROM read_parquet(?) WHERE date_utc = ?::DATE
+                      AND (processing = 'SP' OR platform_mask & ? <> 0) AND {bounds}
+                    GROUP BY x, y, sensor
+                """, [step, step, partitions(self.output, paths), day, self.days[day]["nrt"], *params]).fetchall()
+            features = [point(min(180, (x + .5) * step), min(90, (y + .5) * step), {"sensor": sensor, "count": count})
+                        for x, y, sensor, count in rows]
+        return {"type": "FeatureCollection", "features": features,
+                "metadata": {**self.metadata(bbox), "date_utc": day, "step_degrees": step}}
 
     def map_points(self, day, bbox, layer, sensor, limit, offset):
         info = self.days[day]
@@ -462,7 +556,7 @@ def overview_regions(history, bbox, month, start, end, resolution):
         region_bbox = [wrap(min(unwrapped)), min(y for y, _ in boundary),
                        wrap(max(unwrapped)), max(y for y, _ in boundary)]
         features.append(point(lon, lat, {"region": h3.int_to_str(region), "activity": value if usable else None,
-                                         "bbox": region_bbox,
+                                         "bbox": region_bbox, "boundary": [[x, y] for (y, _), x in zip(boundary, unwrapped)],
                                          "observed_cell_days": observed, "baseline_years": len(past),
                                          "historical_median": historical_median, "historical_percentile": percentile}))
     return {"type": "FeatureCollection", "features": features,

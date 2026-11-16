@@ -44,6 +44,13 @@ const staticData = (() => {
     const applies = item => overlaps(item.bbox, bbox)
       && item.start < end_exclusive && start < item.end_exclusive;
     const coverage = catalog.coverage.filter(applies);
+    if (!coverage.length) {
+      const rows = [];
+      for (let day = start; day < end_exclusive; day = dateOffset(day, 1)) {
+        rows.push({date_utc: day, sensor_detections: {MODIS: null, VIIRS: null}, partial_sensors: [], points: []});
+      }
+      return {rows, unavailable_packets: 0};
+    }
     const sensors = new Map(Object.entries(catalog.sources).map(([sensor, product]) => [product, sensor]));
     const coveredSelection = coverage.map(item => ({
       product: item.product,

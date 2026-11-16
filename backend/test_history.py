@@ -112,6 +112,31 @@ class ArchiveTest(unittest.TestCase):
         lon2 = second["features"][0]["geometry"]["coordinates"][0]
         self.assertEqual({lon1, lon2}, {-179.8, 179.8})
 
+    def test_analytics_week_boundaries_and_sensor_coverage(self):
+        result = self.history.analytics(WORLD, date(2019, 12, 29), date(2020, 1, 3))
+        last, first = result["weeks"]
+        self.assertEqual((last["year"], last["week"], last["observed_cell_days"]), (2019, 52, 0))
+        self.assertEqual((first["year"], first["week"], first["observed_cell_days"]), (2020, 1, 4))
+        self.assertEqual(first["days"][0]["date_utc"], "2019-12-30")
+        december, january = result["months"]
+        self.assertEqual(december["sensors"]["VIIRS"], {"count": 0, "reporting_days": 3})
+        self.assertEqual(january["sensors"]["MODIS"], {"count": 2, "reporting_days": 2})
+
+        result = self.history.analytics(WORLD, date(2001, 8, 1), date(2001, 8, 4))
+        self.assertEqual(result["weeks"][0]["available_days"], 2)
+        self.assertEqual(result["months"][0]["sensors"]["VIIRS"], {"count": None, "reporting_days": 0})
+
+    def test_frp_summary_uses_full_filtered_day(self):
+        bbox = (170, -10, -170, 10)
+        sample = self.history.map_points("2026-11-04", bbox, "detections", "VIIRS", 1, 0)
+        self.assertEqual(len(sample["features"]), 1)
+        stats = self.history.daily_frp("2026-11-04", bbox)
+        self.assertEqual(stats["VIIRS"], {"sample_count": 2, "mean_mw": 10, "bins": [0, 2, 0, 0, 0]})
+        self.assertEqual(stats["MODIS"]["sample_count"], 0)
+        density = self.history.daily_density("2026-11-04", bbox, .25)
+        self.assertEqual(sum(feature["properties"]["count"] for feature in density["features"]), 2)
+        self.assertEqual({feature["properties"]["sensor"] for feature in density["features"]}, {"VIIRS"})
+
     def test_repeat_build_uses_same_release(self):
         self.assertEqual(build_archive(self.config, self.output), self.release)
 
@@ -120,9 +145,10 @@ class ArchiveTest(unittest.TestCase):
         for end in (date(2024, 2, 1), date(2024, 1, 4)):
             expected, = self.calendar(month.isoformat(), end.isoformat())
             exported = json.loads(month_file(self.history, WORLD, expected))
-            for resolution in (2, 3):
+            for resolution in (2, 3, 4, 5):
                 overview = self.history.overview(WORLD, month, month, end, resolution)
-                self.assertEqual(exported["maps"][str(resolution)], overview["features"])
+                if resolution in (2, 3):
+                    self.assertEqual(exported["maps"][str(resolution)], overview["features"])
                 rows = [feature["properties"] for feature in overview["features"]]
                 self.assertTrue(rows)
                 self.assertEqual(sum(row["activity"] for row in rows), expected["activity"])

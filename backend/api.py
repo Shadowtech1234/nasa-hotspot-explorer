@@ -16,10 +16,18 @@ from fastapi.staticfiles import StaticFiles
 
 from .aggregate import OUTPUT_DIR
 from .archive import parse_day
-from .history import open_history
+from .history import FRP_LABELS, frp_summary, open_history
 
 
 FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
+
+
+class ExplorerFiles(StaticFiles):
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        if path == "." or Path(path).suffix in {".html", ".js", ".css"}:
+            response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 # FastAPI uses this enum to validate the optional sensor query parameter.
@@ -37,6 +45,12 @@ def create_app(output_dir=OUTPUT_DIR, world_output=None):
             return json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             raise HTTPException(503, "Demo data unavailable. Generate the backend outputs.") from None
+
+    def demo_map(day):
+        manifest = load(output_dir / "manifest.json")
+        if not manifest["start"] <= day < manifest["end_exclusive"]:
+            raise HTTPException(404, "Date is outside the demo window")
+        return load(output_dir / manifest["data_version"] / "map" / f"{day}.geojson")
 
     # Read the active release on each request so rebuilds can go live without a restart.
     def archive(version, dataset=None):
@@ -103,10 +117,7 @@ def create_app(output_dir=OUTPUT_DIR, world_output=None):
         if bbox or layer == "cells" or offset:
             raise HTTPException(422, "Requested map layer or filter requires a FIRMS archive release")
         # The manifest defines which UTC dates have map files in this release.
-        manifest = load(output_dir / "manifest.json")
-        if not manifest["start"] <= day < manifest["end_exclusive"]:
-            raise HTTPException(404, "Date is outside the demo window")
-        collection = load(output_dir / manifest["data_version"] / "map" / f"{day}.geojson")
+        collection = demo_map(day)
         # Filter the response in memory and leave the saved GeoJSON intact.
         if sensor:
             collection["features"] = [
@@ -126,10 +137,52 @@ def create_app(output_dir=OUTPUT_DIR, world_output=None):
         except (OSError, ValueError):
             raise HTTPException(503, "Calibration results are unavailable") from None
 
+    @app.get("/api/analytics")
+    def analytics(start: str, end: str, bbox: str | None = None, version: str | None = None,
+                  dataset: Literal["regional", "world"] | None = None):
+        release = archive(version, dataset)
+        if release is None:
+            raise HTTPException(404, "Historical analytics require a FIRMS archive release")
+        try:
+            return release.analytics(release.selection(bbox), parse_day(start), parse_day(end))
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        except (OSError, duckdb.Error):
+            raise HTTPException(503, "Could not query historical analytics") from None
+
+    @app.get("/api/frp")
+    def frp(date: str, bbox: str | None = None, version: str | None = None,
+            dataset: Literal["regional", "world"] | None = None):
+        try:
+            day = parse_day(date).isoformat()
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        release = archive(version, dataset)
+        if release is None:
+            if bbox:
+                raise HTTPException(422, "Area filters require a FIRMS archive release")
+            collection = demo_map(day)
+            rows = collection["features"]
+            collection_version = collection["metadata"]["data_version"]
+            stats = {sensor.value: frp_summary(row["properties"]["frp_mw"] for row in rows
+                                             if row["properties"]["sensor"] == sensor.value)
+                     for sensor in Sensor}
+        else:
+            try:
+                if day not in release.days:
+                    raise HTTPException(404, "Date is outside the archive release")
+                stats = release.daily_frp(day, release.selection(bbox))
+                collection_version = release.version
+            except ValueError as error:
+                raise HTTPException(422, str(error)) from None
+            except (OSError, duckdb.Error):
+                raise HTTPException(503, "Could not query fire radiative power") from None
+        return {"date_utc": day, "data_version": collection_version, "bins_mw": FRP_LABELS, "sensors": stats}
+
     @app.get("/api/overview")
     def overview(month: str, start: str, end: str, bbox: str | None = None, version: str | None = None,
                  dataset: Literal["regional", "world"] | None = None,
-                 resolution: Literal["2", "3"] = "2"):
+                 resolution: Literal["2", "3", "4", "5"] = "2"):
         release = archive(version, dataset)
         if release is None:
             raise HTTPException(404, "The monthly map requires an archive release")
@@ -140,9 +193,25 @@ def create_app(output_dir=OUTPUT_DIR, world_output=None):
         except (OSError, duckdb.Error):
             raise HTTPException(503, "Could not load the monthly map") from None
 
+    @app.get("/api/density")
+    def density(date: str, step: Literal["0.1", "0.25", "1"] = "1", bbox: str | None = None,
+                version: str | None = None, dataset: Literal["regional", "world"] | None = None):
+        release = archive(version, dataset)
+        if release is None:
+            raise HTTPException(404, "Gridded density requires a FIRMS archive release")
+        try:
+            day = parse_day(date).isoformat()
+            if day not in release.days:
+                raise HTTPException(404, "Date is outside the archive release")
+            return release.daily_density(day, release.selection(bbox), float(step))
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+        except (OSError, duckdb.Error):
+            raise HTTPException(503, "Could not load detection density") from None
+
     # Register this last so the root mount cannot intercept API or docs routes.
     if (FRONTEND_DIR / "index.html").is_file():
-        app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
+        app.mount("/", ExplorerFiles(directory=FRONTEND_DIR, html=True), name="frontend")
 
     return app
 

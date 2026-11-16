@@ -1,7 +1,7 @@
 ## Build the historical archive
 
-The FastAPI server on this page is a local preview for archive endpoints. The
-public static site uses the [monthly export built during packaging](../frontend/README.md#refresh-the-published-data).
+The FastAPI app serves the explorer against a local archive. The public static
+site uses the [monthly export built during packaging](../frontend/README.md#refresh-the-published-data).
 
 ### Worldwide deployment
 
@@ -138,10 +138,13 @@ local under `backend/data/`. The aggregate command prints the version directory
 with the generated calendar, daily maps, and `audit.json`. These are under
 `backend/outputs/`.
 
-Open http://127.0.0.1:8000/docs to try the legacy demo endpoints. If the sample
-outputs already exist, you can start Uvicorn without fetching again. The dashboard
-uses the [static data path](../frontend/README.md).
+Open the API docs at `http://127.0.0.1:8000/docs`. When this checkout
+includes `frontend/index.html`, the same Uvicorn command also serves the
+dashboard at `http://127.0.0.1:8000/`. Open the dashboard at that address so
+relative requests such as `/api/calendar` reach FastAPI directly.
 
+On a backend-only checkout, use `/docs` to try the API. If the sample outputs
+already exist, you can start Uvicorn without fetching again.
 
 - `GET /api/calendar` returns the daily counts and metadata. An example row is
   `{"date_utc":"2025-08-01","sensor_detections":{"MODIS":2,"VIIRS":0}}`.
