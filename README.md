@@ -17,3 +17,14 @@ release or run the five-day sensor comparison demo.
 
 See the [frontend guide](frontend/README.md) for publishing and running the
 browser-only site with packaged data.
+
+## Render demo
+
+Create a Free Python Web Service from `main` with the repository root as
+the working directory. Use `pip install -r backend/requirements.txt` as
+the build command and `python -m uvicorn backend.api:app --host 0.0.0.0 --port $PORT`
+as the start command.
+
+Set `FIRMS_OUTPUT_DIR=backend/deploy-data/western-us` and use `/api/health` as
+the health check path. The bundled Western US archive covers August 2019
+through 2024. The app queries that release without a FIRMS key.

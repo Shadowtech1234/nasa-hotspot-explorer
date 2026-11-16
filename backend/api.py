@@ -64,6 +64,18 @@ def create_app(output_dir=OUTPUT_DIR, world_output=None):
             raise HTTPException(409, "The archive changed. Reload the calendar.")
         return result
 
+    @app.get("/api/health")
+    def health():
+        release = archive(None, "regional")
+        if release is None:
+            raise HTTPException(503, "Regional archive is unavailable")
+        manifest = release.manifest
+        paths = [*manifest["cells"].values(), *manifest["monthly"].values(),
+                 *(path for files in manifest["raw"].values() for path in files)]
+        if not paths or not all((output_dir / path).is_file() for path in paths):
+            raise HTTPException(503, "Regional archive files are unavailable")
+        return {"status": "ok", "data_version": release.version}
+
     @app.get("/api/archives")
     def archives():
         choices = []

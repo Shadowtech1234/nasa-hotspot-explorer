@@ -8,3 +8,6 @@ __pycache__/
 backend/data/
 backend/outputs/
 /frontend/data/local/
+/frontend/data/world/
+/frontend/data/.world-*/
+/backend/deploy-data/*/query-tmp/
