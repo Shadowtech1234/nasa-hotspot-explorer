@@ -10,6 +10,7 @@
       document.documentElement.dataset.theme = localStorage.getItem("hotspot-theme") === "light" ? "light" : "dark";
     } catch {}
   </script>
+  <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon.png">
   <link rel="stylesheet" href="assets/leaflet.css">
   <link rel="stylesheet" href="styles.css?v=2">
   <script defer src="assets/leaflet.js"></script>
@@ -22,7 +23,7 @@
 <body>
   <a class="skip" href="#workspace">Skip to explorer</a>
   <header class="top">
-    <a class="identity" href="#workspace"><span class="mark" aria-hidden="true"></span><span>Fire Explorer</span></a>
+    <a class="identity" href="#workspace"><span class="mark" aria-hidden="true"></span><span>FireSignal</span></a>
     <button id="theme-toggle" class="theme-toggle" type="button" aria-label="Dark mode" aria-pressed="true">
       <span id="theme-icon" aria-hidden="true">☾</span><span id="theme-label" aria-hidden="true">Dark</span>
     </button>
