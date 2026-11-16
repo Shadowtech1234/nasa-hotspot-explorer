@@ -1,33 +1,114 @@
 # Hotspot Explorer
 
-The frontend renders the MODIS and VIIRS calendar, hotspot map, detection table,
-and side-by-side sensor comparison. It requires the backend to supply detection
-data and shows a connection error when the API is unavailable.
+The map, calendar, and sensor comparison run from static files. JavaScript selects
+the FIRMS CSV packets for the requested bounds and dates. A PyScript worker runs
+the Python analysis with Pyodide and returns daily detection counts and points.
+Monthly activity uses precomputed archive results and historical percentiles.
 
-## Connect the backend
+## Run locally
 
-Serve this directory as the website and route the following relative paths to
-the backend on the website's origin:
+From the repository root:
 
-- `GET /api/calendar` supplies the study bounding box, source labels, export
-  version, and reported MODIS and VIIRS counts by UTC date. Zero is a reported
-  count. A null count means the source is unavailable.
-- `GET /api/map?date=YYYY-MM-DD` supplies the selected day's GeoJSON points and
-  metadata for the same export version.
+    python -m http.server 8000 --bind 127.0.0.1 --directory frontend
 
-The frontend displays API counts and uses the exported area and dates. FIRMS
-ingestion, validation, and aggregation belong to the backend. The historical
-views require a backend historical export.
+Open http://127.0.0.1:8000/. The browser downloads the pinned PyScript runtime
+and Pyodide on the first detailed analysis. The default site uses its checked-in
+five-day sample.
 
-## Preview the interface
+For the generated Western US preview, package to the Git-ignored
+`frontend/data/local` directory and open
+[the local dataset](http://127.0.0.1:8000/?data=local). It covers the
+full month of August in each year from 2019 through 2024. It includes Central
+California, Northern California, and Southern Oregon, within bounds
+[-122.75, 38, -119.5, 44]. Other months have no published sample data.
 
-From this folder, run `python -m http.server 8000 --bind 127.0.0.1` and open
-`http://127.0.0.1:8000/`. This static preview displays the map imagery and
-interface while the API is being connected.
+The sample uses standard-processing MODIS and Suomi-NPP VIIRS observations
+clipped from the NASA FIRMS [US yearly country downloads](https://firms.modaps.eosdis.nasa.gov/country/).
+Select August 2024 in **Monthly activity** to see a percentile calculated
+against the five earlier Augusts.
 
-The basemaps use Natural Earth geometry and NASA EOSDIS GIBS NOAA-20 VIIRS
-Corrected Reflectance imagery from November 10, 2026 UTC. Leaflet is bundled
-with its license in the assets folder.
+The wide view shows detection concentration in a heat map. Zoom in and pan
+to load individual detections and daily counts for the map view. Use **Zoom to
+data** to go directly to the published study area. To hold a specific area
+while panning, choose **Draw box** and drag between opposite corners.
+**Clear box** returns to automatic viewport selection.
+
+Use the date fields to change the inclusive UTC range for the detailed view.
+Clicking a calendar day updates the map, comparison, and detection table from
+the same result without another CSV download. The heat map uses the full
+published date range shown above the map. Its colors represent relative
+concentration of recorded detections.
+
+A zero indicates published input coverage and no detections in the selection.
+Counts marked partial cover only the available part of the selection. An
+uncovered area or date, or a failed packet, makes the affected sensor and day
+unavailable. Use **Reload data** to retry failed downloads. Input coverage does
+not describe satellite overpasses.
+
+## Monthly activity
+
+Change the map's **View** to **Monthly activity** and select a published region
+and month. The wide map shows combined sensor activity as heat. Zoom in to see
+grid region circles. Circle size shows activity and color shows the historical
+percentile. An incomplete month or a month with fewer than five complete prior
+comparisons has no percentile. Switch to **Detections** to filter by sensor or
+draw a custom box.
+
+## Refresh the published data
+
+Keep the raw CSVs, input manifests, and FIRMS key local. Run the packager from the
+repository root:
+
+    python -m backend.package_static --manifest backend/data/manifest.json --initial-bounds -124.5 37 -119 40
+
+To publish monthly activity alongside detections, first build a local archive
+as described in the [archive guide](../backend/howtotest.md). Add
+`--archive-output` pointing to the output directory that contains
+`history.json`. The packager includes the archive footprint by default.
+To publish named subsets, pass `--regions` with a JSON list of objects
+containing `id` (a unique lowercase slug), `label`, and
+`bbox` ([west, south, east, north]). Each region needs to lie within
+the archive. The browser fetches that region's calendar and the selected month's
+summary. Keep the local Parquet data and raw archive inputs outside the site.
+
+The command accepts the existing ingestion manifest. For a new extract, prepare a
+manifest next to its CSVs with the actual requested footprint and UTC interval.
+For example:
+
+    {
+      "bbox": [-124.5, 37, -119, 42],
+      "start": "2025-08-01",
+      "end_exclusive": "2025-08-06",
+      "sources": {
+        "MODIS": {"source_id": "MODIS_SP", "file": "modis.csv"},
+        "VIIRS": {"source_id": "VIIRS_SNPP_SP", "file": "viirs.csv"}
+      }
+    }
+
+Repeat the manifest flag to retain earlier windows in a new release. Use one
+extract per product and date and one product per sensor for the release. The
+dates in the manifest should describe known source availability, even if a CSV
+contains zero rows. NASA can publish standard processing data after a delay.
+Check the [NASA FIRMS archive](https://firms.modaps.eosdis.nasa.gov/download/)
+for available dates.
+
+The command writes versioned CSV packets and a separate heat map summary to
+**frontend/data**, then updates the index. The summary stores counts and average
+coordinates for occupied 1° cells by sensor. Inspect the raw and overview file
+sizes before expanding the area. Publish the **frontend** directory as the static site root. On GitHub Pages
+with GitHub Actions as the source, pass **frontend** as the artifact path in the
+[Pages workflow](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages).
+The files use relative URLs so they work under a repository subpath.
+
+## Algorithm integration
+
+The in-memory entry point is **frontend/analysis/detail.py**, function
+**analyze(request)**. Its request contains exact **bbox**, UTC **start** and
+**end_exclusive**, coverage entries, and CSV packets with sensor/product
+metadata and text. Missing packet text is null. The result contains daily
+**sensor_detections**, **partial_sensors**, and **points**, plus an unavailable-packet count.
+Replace the demo count calculation after agreeing on the new metric and its
+output contract with the algorithm owner.
 
 ## Satellite scene provenance
 
