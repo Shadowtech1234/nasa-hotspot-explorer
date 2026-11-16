@@ -1,37 +1,39 @@
 # Fire Signal
 
-Fire Signal is an interactive dashboard for exploring satellite fire detections from NASA’s Fire Information for Resource Management System (FIRMS). It helps answer a question a hotspot map alone can’t: **Was this month unusually active for this area?**
+**Explore NASA satellite fire detections and see how a month compares with the same season in earlier years.**
 
-[Open the live dashboard](YOUR_VERCEL_URL) · [Watch the 30-second demo](YOUR_DEMO_VIDEO_URL)
+Fire Signal is a dashboard for students, educators, and anyone exploring fire activity. It brings together daily hotspot maps, sensor comparisons, and historical context using observations from NASA’s Fire Information for Resource Management System (FIRMS).
 
-## What you can do
+[Frontend documentation](frontend/README.md) · [Backend and archive files](backend/) · [Data credits](#data-credits)
 
-| View | What it shows |
+## Explore the dashboard
+
+| View | What you can explore |
 | --- | --- |
-| **Map & Calendar** | Filter by area, date, or sensor. Select a day to see individual hotspot detections or explore monthly activity on a map. |
-| **Analysis** | Explore daily and seasonal detection patterns and fire radiative power. Export filtered detections as CSV or JSON. |
-| **Compare** | Compare MODIS and Suomi-NPP VIIRS observations on synchronized maps and see detection trends over time. |
-| **History** | Explore weekly activity and see how a month ranks against the same month in earlier years. |
+| **Map & Calendar** | Filter by area, date, or sensor. Select a day to inspect individual hotspots or view monthly activity across the map. |
+| **Analysis** | Explore daily and seasonal patterns and the distribution of fire radiative power (FRP). |
+| **Compare** | Compare MODIS and Suomi-NPP VIIRS trends and inspect the same period on synchronized maps. |
+| **History** | Explore weekly activity and see where a month ranks against the same calendar month in earlier years. |
 
-## How it works
+Each view supports CSV and JSON exports. The bundled five-day sample supports daily detections, density, sensor comparison, and FRP. Historical views require archive data or a compatible monthly export. Weekly activity requires the server archive.
 
-Fire Signal groups NASA FIRMS detections into hexagonal grid cells. For the historical analysis, it measures how many grid cells showed activity each day and uses Suomi-NPP VIIRS as a reference to put monthly activity from both instruments on a comparable scale.
+## How monthly comparisons work
 
-The dashboard compares each eligible month with the same calendar month in earlier years for the selected area. It also distinguishes days with zero detections from days when source data was unavailable. These choices help users interpret what they see and put a busy month in seasonal context.
+1. **Group detections into hexagons.** Historical analysis counts how many H3 grid cells had at least one detection on each day.
+2. **Adjust for differences between sensors.** The monthly calculation uses Suomi-NPP VIIRS as the reference for comparing activity across instruments.
+3. **Compare like months.** The dashboard ranks an eligible month against the same calendar month in earlier years for the selected area.
 
-## Why we built it
+A reported zero means the source recorded zero detections for that day. Missing data is shown as unavailable. The historical ranking describes observed satellite activity in the selected area.
 
-Satellite data can show where fire activity was detected, but raw records are difficult to explore without specialized tools. We built Fire Signal for students, educators, and anyone curious about fire activity. The dashboard brings the map, sensor comparisons, and historical context together so users can explore the data from their browser.
+## Project files
 
-## Built with
-
-- **Python and FastAPI** for data processing and the API
-- **HTML, CSS, and JavaScript** for the browser interface
-- **NASA FIRMS** for MODIS and Suomi-NPP VIIRS fire detection data
-
+| Directory | Contents |
+| --- | --- |
+| [`frontend/`](frontend/) | Browser interface built with HTML, CSS, JavaScript, and Leaflet. |
+| [`backend/`](backend/) | Python data processing, archive tooling, and the FastAPI service. |
 
 ## Data credits
 
-Fire Signal uses NASA FIRMS standard-processing observations. The bundled archive was prepared using the [Portolan FIRMS mirror](https://source.coop/portolan-mirrors/firms-catalog).
+Fire Signal uses MODIS and Suomi-NPP VIIRS standard-processing observations from NASA FIRMS. The bundled archive was prepared using the [Portolan FIRMS mirror](https://source.coop/portolan-mirrors/firms-catalog). The [frontend documentation](frontend/README.md#satellite-scene-provenance) records the sources for the satellite basemap imagery.
 
-Built for the NASA Space Apps Challenge.
+Built for the **NASA Space Apps Challenge**.
