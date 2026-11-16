@@ -338,6 +338,15 @@ button:hover:not(:disabled) { background: #243832; }
   min-width: 0;
 }
 .workspace-card > summary, .inline-method > summary, .chart-values > summary { cursor: pointer; font-weight: 650; }
+.firms-import-controls { margin-top: .75rem; }
+.firms-import-controls input { max-width: 100%; color: var(--ink); }
+#firms-import-status:not(:empty) { margin-top: .65rem; overflow-wrap: anywhere; }
+.firms-import-results { display: grid; gap: .55rem; margin-top: .8rem; }
+.firms-import-table { max-height: 23rem; overflow: auto; }
+.firms-import-table caption { padding: .5rem 0; text-align: left; font-weight: 650; }
+.firms-import-table td:last-child { width: 65%; }
+.firms-import-count { display: grid; grid-template-columns: minmax(4ch, auto) minmax(1rem, 1fr); align-items: center; gap: .65rem; }
+.firms-import-count span:last-child { height: .45rem; border-radius: .25rem; background: var(--accent); }
 #map-workspace {
   display: grid;
   grid-template-areas: "calendars map filters";

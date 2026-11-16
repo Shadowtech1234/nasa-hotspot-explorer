@@ -49,6 +49,14 @@ five-day sample. PyScript runs the existing Python analysis in the browser.
 Choose **Published detections** in the archive selector for custom bounds or
 date ranges. Published monthly regions use the bounds and months in the export.
 
+To analyze your own data, open **History → Analyze a FIRMS CSV** and choose a
+plain MODIS or VIIRS CSV from NASA FIRMS. Extract the CSV first if your
+download is a ZIP. The file can be up to 10 MiB and must include `acq_date`
+(YYYY-MM-DD in UTC), `latitude`, and `longitude`. If present, `frp` is
+summarized in megawatts. The browser counts all valid detections by month and
+maps the first 5,000. Imported data stays in the current page and works
+without the archive API.
+
 To use a generated preview in the ignored `frontend/data/local` directory,
 open `http://127.0.0.1:8000/?data=local`.
 

@@ -12,13 +12,14 @@
   </script>
   <link rel="icon" type="image/png" sizes="32x32" href="assets/favicon.png">
   <link rel="stylesheet" href="assets/leaflet.css">
-  <link rel="stylesheet" href="styles.css?v=2">
+  <link rel="stylesheet" href="styles.css?v=3">
   <script defer src="assets/leaflet.js"></script>
   <script defer src="static-data.js"></script>
   <script defer src="static-api.js"></script>
   <script defer src="app.js?v=2"></script>
   <script defer src="compare.js?v=2"></script>
   <script defer src="analytics.js?v=2"></script>
+  <script defer src="firms-import.js"></script>
 </head>
 <body>
   <a class="skip" href="#workspace">Skip to explorer</a>
@@ -119,6 +120,32 @@
       </section>
       <div id="history-calendar"></div>
       <div id="history-percentiles"></div>
+      <section class="workspace-card" aria-labelledby="firms-import-title">
+        <div class="panel-heading">
+          <div>
+            <h2 id="firms-import-title">Analyze a FIRMS CSV</h2>
+            <p id="firms-import-help">Choose a NASA FIRMS MODIS or VIIRS CSV up to 10 MiB. The file stays in your browser.</p>
+          </div>
+        </div>
+        <div class="actions firms-import-controls">
+          <input id="firms-import-file" type="file" accept=".csv,.zip,text/csv,application/zip" aria-label="Choose FIRMS CSV" aria-describedby="firms-import-help">
+          <button id="firms-import-clear" type="button" disabled>Clear file</button>
+        </div>
+        <p id="firms-import-status" role="status"></p>
+        <div id="firms-import-results" class="firms-import-results" hidden>
+          <h3>Imported hotspots</h3>
+          <p id="firms-import-map-caption" class="subtle"></p>
+          <div id="firms-import-map" class="compare-map" role="region" aria-label="Map of imported detections" aria-describedby="firms-import-map-caption"></div>
+          <p id="firms-import-frp" class="subtle"></p>
+          <div class="firms-import-table" tabindex="0" role="region" aria-label="Monthly detection totals">
+            <table>
+              <caption>Monthly detections (UTC)</caption>
+              <thead><tr><th scope="col">Month</th><th scope="col">Detections</th></tr></thead>
+              <tbody id="firms-import-months"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
     </section>
     <section id="archive-panel" class="archive-panel" aria-labelledby="archive-title" hidden>
         <div class="panel-heading">
