@@ -8,6 +8,9 @@
   <link rel="stylesheet" href="assets/leaflet.css">
   <link rel="stylesheet" href="styles.css">
   <script defer src="assets/leaflet.js"></script>
+  <script defer src="assets/leaflet-heat-global.js"></script>
+  <script defer src="static-data.js"></script>
+  <script defer src="monthly.js"></script>
   <script defer src="app.js"></script>
   <script defer src="compare.js"></script>
 </head>
@@ -31,9 +34,15 @@
         <button type="button" data-sensor="both" aria-pressed="true">Both</button><button type="button" data-sensor="MODIS" aria-pressed="false">MODIS</button><button type="button" data-sensor="VIIRS" aria-pressed="false">VIIRS</button>
       </div></div>
       <div class="filter"><span class="caption">Study area</span><span id="area-name" class="subtle"></span></div>
+      <form id="date-range" class="dates">
+        <label class="filter"><span class="caption">From (UTC)</span><input id="date-start" type="date" required></label>
+        <label class="filter"><span class="caption">Through (UTC)</span><input id="date-end" type="date" required></label>
+        <button id="apply-dates" type="submit">Apply dates</button>
+      </form>
+      <p id="published-dates" class="subtle"></p>
     </section>
     <div class="actions">
-      <p id="status" class="status" role="status">Loading the detection calendar…</p>
+      <p id="status" class="status" role="status">Loading the published dataset…</p>
       <button id="retry-data" type="button">Reload data</button>
     </div>
     <section id="map-panel" role="tabpanel" aria-labelledby="map-tab">
@@ -41,16 +50,27 @@
         <div class="panel-heading map-heading">
           <div><h2 id="map-title">Hotspot map</h2><p id="map-scope"></p></div>
           <div class="map-tools">
+            <label class="basemap-label">View <select id="map-mode"><option value="detections">Detections</option><option value="monthly" disabled>Monthly activity</option></select></label>
             <label class="basemap-label">Basemap <select id="basemap"><option value="satellite">Satellite</option><option value="simple">Simple</option></select></label>
-            <button id="fit-area" type="button">Fit area</button>
+            <button id="draw-area" type="button" aria-pressed="false">Draw box</button>
+            <button id="clear-box" type="button" hidden>Clear box</button>
+            <button id="fit-area" type="button">Zoom to data</button>
             <button id="resize-map" type="button" aria-pressed="false">Larger map</button>
           </div>
+        </div>
+        <div id="monthly-controls" class="map-footer" hidden>
+          <label class="basemap-label">Published region <select id="monthly-region"></select></label>
+          <span class="subtle">Combined sensors</span>
         </div>
         <div id="map" role="region" aria-label="Interactive hotspot map" aria-describedby="map-help" tabindex="0"></div>
         <div class="map-footer"><div id="legend" class="legend"></div><p id="map-help" class="map-help"></p></div>
       </section>
-      <section class="calendar-panel" aria-labelledby="calendar-title">
-        <div class="panel-heading"><div><h2 id="calendar-title">Burning activity calendar</h2><p>Exported UTC dates · 0 no detections · ? source unavailable</p></div></div>
+      <section id="monthly-panel" class="calendar-panel" aria-labelledby="monthly-title" hidden>
+        <div class="panel-heading"><div><h2 id="monthly-title">Monthly activity calendar</h2><p>Combined sensor activity in cell-days</p></div></div>
+        <div id="monthly-calendar" class="monthly-calendar"></div>
+      </section>
+      <section id="daily-panel" class="calendar-panel" aria-labelledby="calendar-title">
+        <div class="panel-heading"><div><h2 id="calendar-title">Burning activity calendar</h2><p>Detection counts by UTC day · 0 no detections · * partial coverage · ? source unavailable</p></div></div>
         <div id="calendar" class="calendar"></div>
       </section>
     </section>
@@ -90,7 +110,7 @@
       <summary>Data &amp; methods</summary>
       <p id="coverage"></p>
       <p>Raw counts are satellite observations of thermal anomalies. Repeated observations may refer to the same fire. MODIS and VIIRS have different resolutions and overpass times. Clouds, smoke, and gaps between overpasses can hide activity.</p>
-      <p>A zero means the available source reported no detections in the study area on that day. A question mark means the source is unavailable.</p>
+      <p>An asterisk means the count covers only part of the selected area. A question mark means the source is unavailable. An unmarked zero means the available source reported no detections in the selected area that day.</p>
       <p><a href="https://firms.modaps.eosdis.nasa.gov/download/">NASA FIRMS archive</a> · <a href="https://forum.earthdata.nasa.gov/viewtopic.php?t=5178">NASA detection guidance</a> · <a href="https://www.naturalearthdata.com/">Natural Earth basemap</a></p>
     </details>
     </section>
