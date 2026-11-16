@@ -265,7 +265,12 @@ def read_config(path):
     for outage in outages:
         if outage["platform"] not in PLATFORMS or parse_day(outage["start"]) >= parse_day(outage["end_exclusive"]):
             raise ValueError("Outages must give a known platform and nonempty UTC date interval")
-    return bbox, config.get("region", "World" if bbox == WORLD else "Archive study area"), inputs, outages
+    footprint = None
+    if "footprint" in config:
+        info = config["footprint"]
+        footprint = ((path.parent / info["path"]).read_bytes(), info["source_url"])
+    region = config.get("region", "World" if bbox == WORLD else "Archive study area")
+    return bbox, region, inputs, outages, footprint
 
 
 def day_masks(imports, outages):

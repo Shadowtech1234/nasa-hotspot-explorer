@@ -2,3 +2,4 @@ fastapi>=0.115,<1
 uvicorn>=0.34,<1
 duckdb>=1.4,<2
 h3>=4.2,<5
+shapely>=2.1,<3

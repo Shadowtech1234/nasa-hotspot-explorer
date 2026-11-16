@@ -3,7 +3,7 @@
 from collections import Counter, defaultdict
 from contextlib import contextmanager
 from datetime import date, timedelta
-from functools import lru_cache
+from functools import cached_property, lru_cache
 import json
 from pathlib import Path
 from statistics import median
@@ -11,8 +11,10 @@ import tempfile
 
 import duckdb
 from h3.api import basic_int as h3
+from shapely import box, from_wkb
+from shapely.geometry import mapping
 
-from .archive import (WORLD, date_range, day_masks, identity, import_input, parse_bounds, parse_day,
+from .archive import (WORLD, date_range, day_masks, identity, import_input, longitude_ranges, parse_bounds, parse_day,
                       publish_dir, read_config, within_bounds)
 from .harmonize import MODES, MODIS, PLATFORMS, REFERENCE, RESOLUTION, calibrate, select_mode
 from .ingest import write_json
@@ -128,10 +130,18 @@ def archive_inventory(imports):
 
 
 def build_archive(config, output):
-    bbox, region, inputs, outages = read_config(Path(config))
+    bbox, region, inputs, outages, footprint = read_config(Path(config))
     output = Path(output).resolve()
-    version = identity([SCHEMA_VERSION, bbox, region, outages, sorted(
-        (entry for _, entry in inputs), key=lambda entry: entry["id"])])[:24]
+    release_inputs = [SCHEMA_VERSION, bbox, region, outages, sorted(
+        (entry for _, entry in inputs), key=lambda entry: entry["id"])]
+    if footprint:
+        geometry_bytes, source_url = footprint
+        geometry = from_wkb(geometry_bytes)
+        if (geometry.is_empty or geometry.geom_type not in {"Polygon", "MultiPolygon"} or not geometry.is_valid
+                or not within_bounds(geometry.bounds, bbox)):
+            raise ValueError("Footprint must be a valid polygon inside the archive bounds")
+        release_inputs.append([1, geometry_bytes.hex(), source_url])
+    version = identity(release_inputs)[:24]
     release = output / "history" / version
     marker = "release.json"
     if not (release / marker).is_file():
@@ -140,7 +150,13 @@ def build_archive(config, output):
             stage = Path(tmp) / "publish"
             stage.mkdir()
             with connect(output) as db:
-                manifest, reports, imports = prepare_archive(db, output, release, stage, version, bbox, region, inputs, outages)
+                manifest, reports, imports = prepare_archive(
+                    db, output, release, stage, version, bbox, region, inputs, outages, bool(footprint))
+            if footprint:
+                filename = "footprint.wkb"
+                (stage / filename).write_bytes(geometry_bytes)
+                manifest["footprint"] = {"path": (release / filename).relative_to(output).as_posix(),
+                                         "source_url": source_url}
             write_json(stage / "validation.json", {"data_version": version, "bbox": bbox, "reference": "Suomi-NPP detections",
                        "unit": "active cell-days per H3 resolution 3 tile-month", "calibrations": reports})
             write_json(stage / "audit.json", {"data_version": version, "inputs": imports, "outages": outages})
@@ -150,7 +166,7 @@ def build_archive(config, output):
     return release
 
 
-def prepare_archive(db, output, release, stage, version, bbox, region, inputs, outages):
+def prepare_archive(db, output, release, stage, version, bbox, region, inputs, outages, summarize_raw):
     imports = [import_input(db, path, entry, bbox, output) for path, entry in inputs]
     # Use the current manifest provenance even when the normalized bytes were cached.
     imports = [{**item, **entry} for item, (_, entry) in zip(imports, inputs)]
@@ -191,6 +207,15 @@ def prepare_archive(db, output, release, stage, version, bbox, region, inputs, o
                 "start": min(days), "end_exclusive": (parse_day(max(days)) + timedelta(days=1)).isoformat(),
                 "days": days, "raw": raw, "cells": cells, "monthly": monthly,
                 "worldwide_totals": worldwide_totals, "product_coverage": archive_inventory(imports)}
+    if summarize_raw and raw:
+        counts = defaultdict(dict)
+        for day, sensor, count in db.execute("""
+            SELECT r.date_utc, r.sensor, count(*) FROM read_parquet(?) r JOIN days d USING (date_utc)
+            WHERE r.processing = 'SP' OR r.platform_mask & d.nrt <> 0
+            GROUP BY r.date_utc, r.sensor
+        """, [partitions(output, [file for files in raw.values() for file in files])]).fetchall():
+            counts[day.isoformat()][sensor] = count
+        manifest["daily_sensor_counts"] = counts
     return manifest, reports, imports
 
 
@@ -250,9 +275,38 @@ class History:
         self.start = parse_day(manifest["start"])
         self.end = parse_day(manifest["end_exclusive"])
 
+    @cached_property
+    def footprint(self):
+        info = self.manifest.get("footprint")
+        return from_wkb((self.output / info["path"]).read_bytes()) if info else None
+
+    @cached_property
+    def footprint_geojson(self):
+        outline = self.footprint.simplify(0.01, preserve_topology=True)
+        return {"type": "Feature", "geometry": mapping(outline),
+                "properties": {"source_url": self.manifest["footprint"]["source_url"]}}
+
+    @lru_cache(maxsize=128)
+    def area_coverage(self, bbox):
+        west, south, east, north = bbox
+        regions = [box(lo, south, hi, north) for lo, hi in longitude_ranges(west, east) if lo < hi]
+        if all(self.footprint.covers(region) for region in regions):
+            return "full"
+        if any(self.footprint.intersection(region).area > 0 for region in regions):
+            return "partial"
+        return "unavailable"
+
+    def query_bounds(self, bbox):
+        if self.footprint is not None and within_bounds(self.extent, bbox):
+            return WORLD
+        return bbox
+
     def selection(self, value):
         bbox = self.extent if value is None else parse_bounds(value)
-        if not within_bounds(bbox, self.extent):
+        if self.footprint is not None:
+            if self.area_coverage(bbox) == "unavailable":
+                raise ValueError("Selected area is outside the archive footprint")
+        elif not within_bounds(bbox, self.extent):
             raise ValueError("Bounding box lies outside this archive release")
         return bbox
 
@@ -265,13 +319,18 @@ class History:
         return {"archive": True, "schema_version": SCHEMA_VERSION, "data_version": self.version,
                 "bbox": bbox, "archive_bbox": self.extent, "region": self.manifest["region"],
                 "archive_start": self.start.isoformat(), "archive_end_exclusive": self.end.isoformat(), "sources": sources,
-                "coverage": "unknown", "h3_resolution": RESOLUTION}
+                "coverage": "unknown", "h3_resolution": RESOLUTION,
+                **({"area_coverage": self.area_coverage(bbox), "has_footprint": True}
+                   if self.footprint is not None else {})}
 
     def validation(self):
         path = self.output / "history" / self.version / "validation.json"
         return json.loads(path.read_text(encoding="utf-8"))
 
     def raw_counts(self, db, days, bbox):
+        summary = self.manifest.get("daily_sensor_counts")
+        if summary is not None and self.query_bounds(bbox) == WORLD:
+            return {(day, sensor): count for day in days for sensor, count in summary.get(day, {}).items()}
         paths = [file for month in {day[:7] for day in days} for file in self.manifest["raw"].get(month, [])]
         if not paths:
             return {}
@@ -290,7 +349,7 @@ class History:
                       if month in self.manifest["cells"]]
         by_day = {}
         if cell_paths:
-            bounds, params = bbox_filter(bbox, "cell_lon", "cell_lat")
+            bounds, params = bbox_filter(self.query_bounds(bbox), "cell_lon", "cell_lat")
             by_day = {day.isoformat(): (observed, activity) for day, observed, activity in db.execute(f"""
                 SELECT date_utc, count(*), sum(activity) FROM ({WEIGHTED_CELLS}) WHERE {bounds} GROUP BY date_utc
             """, [partitions(self.output, cell_paths), *params]).fetchall()}
@@ -324,13 +383,13 @@ class History:
         complete = {month for month, selected in calendar.items()
                     if len(selected) == sum(day.startswith(month) for day in self.days)}
         needed = complete | baseline
-        if bbox == WORLD:
+        if self.query_bounds(bbox) == WORLD:
             totals = self.manifest["worldwide_totals"]
         else:
             totals = {}
             paths = [self.manifest["monthly"][month] for month in sorted(needed) if month in self.manifest["monthly"]]
             if paths:
-                bounds, params = bbox_filter(bbox, "cell_lon", "cell_lat")
+                bounds, params = bbox_filter(self.query_bounds(bbox), "cell_lon", "cell_lat")
                 totals = {month: (observed, activity) for month, observed, activity in db.execute(f"""
                     SELECT month, sum(observed), sum(activity) FROM read_parquet(?) WHERE {bounds} GROUP BY month
                 """, [partitions(self.output, paths), *params]).fetchall()}
@@ -516,7 +575,7 @@ def overview_regions(history, bbox, month, start, end, resolution):
     usable = any(info["mode"] for info in days.values())
     paths = [history.manifest["monthly"][past] for past in baseline if past in history.manifest["monthly"]]
     observed_totals = defaultdict(dict)
-    bounds, params = bbox_filter(bbox, "cell_lon", "cell_lat")
+    bounds, params = bbox_filter(history.query_bounds(bbox), "cell_lon", "cell_lat")
     # H3 stores the resolution above the base cell and pads unused child digits with ones.
     # Roll up in DuckDB so a worldwide query sends only region-month totals to Python.
     region_id = f"((cell & {~(15 << 52)}) | {resolution << 52} | {(1 << ((15 - resolution) * 3)) - 1})"
@@ -528,9 +587,15 @@ def overview_regions(history, bbox, month, start, end, resolution):
             """, [partitions(history.output, paths), *params]).fetchall()
             for past, region, activity in rows:
                 observed_totals[region][past] = activity or 0
+        full_month = start == month and end == month_end(key)
         current_path = history.manifest["cells"].get(key)
         current = defaultdict(lambda: [0, 0.0])
-        if current_path:
+        if full_month and key in history.manifest["monthly"]:
+            rows = db.execute(f"""
+                SELECT {region_id} AS region, sum(observed), sum(activity)
+                FROM read_parquet(?) WHERE {bounds} GROUP BY region
+            """, [(history.output / history.manifest["monthly"][key]).as_posix(), *params]).fetchall()
+        elif current_path:
             insert_days(db, days)
             factor_path = history.output / "history" / history.version / "factors.parquet"
             db.execute("CREATE TEMP TABLE factor AS SELECT * FROM read_parquet(?)", [factor_path.as_posix()])
@@ -538,8 +603,10 @@ def overview_regions(history, bbox, month, start, end, resolution):
                 SELECT {region_id} AS region, count(*), sum(activity) FROM ({WEIGHTED_CELLS})
                 WHERE {bounds} GROUP BY region
             """, [(history.output / current_path).as_posix(), *params]).fetchall()
-            for region, observed, activity in rows:
-                current[region] = (observed, activity or 0)
+        else:
+            rows = []
+        for region, observed, activity in rows:
+            current[region] = (observed, activity or 0)
     features = []
     # Regions with past activity can show an unusually quiet month with zero reports.
     for region in sorted(current.keys() | (observed_totals.keys() if complete_current else set())):

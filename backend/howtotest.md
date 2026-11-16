@@ -155,3 +155,26 @@ A count of zero means the source was loaded and there were no eligible detection
 A null count and the `availability` metadata identify missing inputs, including
 on maps with no features. Counts represent valid hotspot records, including
 reported duplicates. Satellite observation coverage is unknown from these CSVs.
+## Rebuild the contiguous U.S. archive
+
+Place the [2024 Census 1:500,000 state ZIP](https://www2.census.gov/geo/tiger/GENZ2024/shp/cb_2024_us_state_500k.zip)
+and the six [Portolan FIRMS](https://source.coop/portolan-mirrors/firms-catalog)
+annual GeoParquet files in a source directory with at least 5.2 GB available.
+For each year 2019–2024, download
+`https://s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop/portolan-mirrors/firms-catalog/detections/year=YYYY/detections.parquet`
+as `YYYY.parquet`. The Census ZIP uses its original name.
+
+```powershell
+python -m pip install -r backend/requirements.txt "duckdb>=1.5,<2" "pyshp>=2.3,<4"
+python -c "import duckdb; duckdb.sql('INSTALL spatial')"
+python -m backend.prepare_conus D:/NASA-CONUS-inputs backend/data/conus
+python -m backend.archive build backend/data/conus/archive.json --output-dir backend/outputs/conus
+python -m unittest backend.test_history
+```
+
+Use `--years 2021` with a separate output directory for a one-year build.
+The preparation step counts missing platform-days worldwide before using the
+Census polygon to clip detections. The archive manifest references that polygon,
+and the generated CSVs already contain only covered detections. Selections that
+cross the footprint return `area_coverage: partial`. Selections wholly
+outside it return HTTP 422.

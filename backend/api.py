@@ -72,6 +72,8 @@ def create_app(output_dir=OUTPUT_DIR, world_output=None):
         manifest = release.manifest
         paths = [*manifest["cells"].values(), *manifest["monthly"].values(),
                  *(path for files in manifest["raw"].values() for path in files)]
+        if "footprint" in manifest:
+            paths.append(manifest["footprint"]["path"])
         if not paths or not all((output_dir / path).is_file() for path in paths):
             raise HTTPException(503, "Regional archive files are unavailable")
         return {"status": "ok", "data_version": release.version}
@@ -84,6 +86,13 @@ def create_app(output_dir=OUTPUT_DIR, world_output=None):
             if release:
                 choices.append({"id": key, "name": release.manifest["region"]})
         return choices
+
+    @app.get("/api/footprint")
+    def footprint(version: str | None = None, dataset: Literal["regional", "world"] | None = None):
+        release = archive(version, dataset)
+        if release is None or "footprint" not in release.manifest:
+            raise HTTPException(404, "This archive has no mapped footprint")
+        return JSONResponse(release.footprint_geojson, media_type="application/geo+json")
 
     @app.get("/api/calendar")
     def calendar(bbox: str | None = None, start: str | None = None, end: str | None = None,

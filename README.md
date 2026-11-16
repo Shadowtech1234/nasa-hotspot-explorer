@@ -18,14 +18,15 @@ VIIRS as a reference to put MODIS and VIIRS activity on a comparable scale.
 Each percentile compares a complete month with the same month in at least five
 earlier years for the selected area.
 
-## Run the Western US demo
+## Run the contiguous U.S. archive
 
-The repository includes a prepared archive for January 2019 through December
-2024 within 122.75°W to 119.5°W and 38°N to 44°N. It uses standard-processing
-MODIS and Suomi-NPP VIIRS records from NASA FIRMS via the
+The prepared archive covers the lower 48 states and Washington, D.C., from
+January 2019 through December 2024. It uses standard-processing MODIS and Suomi-NPP
+VIIRS records from NASA FIRMS via the
 [Portolan FIRMS mirror](https://source.coop/portolan-mirrors/firms-catalog).
-The prepared archive runs without a FIRMS key. Its release audit records source
-files and dates without worldwide standard-processing records for each satellite.
+The archive is clipped to the [2024 Census state boundaries](https://www.census.gov/geographies/mapping-files/2024/geo/carto-boundary-file.html).
+Its release audit records source files and dates without worldwide standard-processing
+records for each satellite. Running the prepared archive requires no FIRMS key.
 
 From the repository root, install the dependencies with Python 3.10 or later.
 
@@ -33,17 +34,17 @@ From the repository root, install the dependencies with Python 3.10 or later.
 python -m pip install -r backend/requirements.txt
 ```
 
-Set the archive path and start the server. In PowerShell, run:
+On Windows, run `start-explorer.cmd` or start the server from PowerShell.
 
 ```powershell
-$env:FIRMS_OUTPUT_DIR = "backend/deploy-data/western-us"
+$env:FIRMS_OUTPUT_DIR = "backend/deploy-data/conus"
 python -m uvicorn backend.api:app --host 127.0.0.1 --port 8765
 ```
 
 On macOS or Linux, run:
 
 ```sh
-FIRMS_OUTPUT_DIR=backend/deploy-data/western-us python -m uvicorn backend.api:app --host 127.0.0.1 --port 8765
+FIRMS_OUTPUT_DIR=backend/deploy-data/conus python -m uvicorn backend.api:app --host 127.0.0.1 --port 8765
 ```
 
 Open [the local dashboard](http://127.0.0.1:8765/).
@@ -70,5 +71,5 @@ directory.
 | --- | --- |
 | Build command | `pip install -r backend/requirements.txt` |
 | Start command | `python -m uvicorn backend.api:app --host 0.0.0.0 --port $PORT` |
-| Environment variable | `FIRMS_OUTPUT_DIR=backend/deploy-data/western-us` |
+| Environment variable | `FIRMS_OUTPUT_DIR=backend/deploy-data/conus` |
 | Health check path | `/api/health` |

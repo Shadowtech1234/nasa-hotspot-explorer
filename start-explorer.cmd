@@ -5,6 +5,7 @@ cd /d "%~dp0"
 set "EXPLORER_PYTHON=python"
 if exist ".venv\Scripts\python.exe" set "EXPLORER_PYTHON=.venv\Scripts\python.exe"
 
+if not defined FIRMS_OUTPUT_DIR if exist "backend\deploy-data\conus\history.json" set "FIRMS_OUTPUT_DIR=backend\deploy-data\conus"
 if not defined FIRMS_OUTPUT_DIR if not exist "backend\outputs\history.json" if not exist "backend\outputs\manifest.json" (
     if exist "backend\outputs\check-overlap\history.json" set "FIRMS_OUTPUT_DIR=backend\outputs\check-overlap"
 )

@@ -47,6 +47,9 @@ L.control.scale({imperial: false, maxWidth: 88}).addTo(map);
 const boundary = L.polyline(areaOutline(region), {
   color: "#a3c2d5", opacity: 0.8, weight: 1, dashArray: "5 5", fill: false, interactive: false
 }).addTo(map);
+const footprintLayer = L.geoJSON(null, {
+  style: {color: "#a3c2d5", opacity: 0.8, weight: 1, fill: false, interactive: false}
+}).addTo(map);
 const pointLayer = L.layerGroup().addTo(map);
 const focusLayer = L.layerGroup().addTo(map);
 map.fitBounds(asLeafletBounds(region), {padding: [22, 22]});
@@ -260,6 +263,12 @@ async function loadBackend(selection = null, areaLabel = "") {
       const initial = firstCalendarMonth(calendar.rows.filter(row => row.date_utc.startsWith(year)));
       const month = previous ?? initial;
       const history = {...calendar, dataset, areaLabel};
+      if (calendar.has_footprint) {
+        history.footprint = state.history?.data_version === calendar.data_version ? state.history.footprint :
+          await fetchApi(apiUrl("/api/footprint", {version: calendar.data_version, ...(dataset ? {dataset} : {})}),
+            request.signal);
+        if (request.signal.aborted) return;
+      }
       if (!state.history && month) {
         $("percentile-panel").hidden = false;
         renderPercentiles(history, month.date_utc, "first");
@@ -269,6 +278,7 @@ async function loadBackend(selection = null, areaLabel = "") {
     } else {
       calendarRequest?.abort();
       state.history = null;
+      footprintLayer.clearLayers();
       state.selection = selection;
       applyCalendar(calendar);
       if (state.tab === "map") fitArea();
@@ -479,6 +489,10 @@ async function selectArchiveMonth(month, {refit = false, history = state.history
     if (active.aborted) return;
     applyCalendar(daily);
     if (history !== state.history) {
+      if (history.footprint !== state.history?.footprint) {
+        footprintLayer.clearLayers();
+        if (history.footprint) footprintLayer.addData(history.footprint);
+      }
       state.history = history;
       state.selection = selection;
       configureArchive(history);
@@ -818,7 +832,8 @@ function renderMap(points) {
   pointLayer.clearLayers();
   focusLayer.clearLayers();
   boundary.setLatLngs(areaOutline(activeBounds()));
-  boundary.setStyle({opacity: state.backend && !isWorld(activeBounds()) ? 0.85 : 0});
+  const wholeFootprint = state.history?.has_footprint && activeBounds().join() === state.history.archive_bbox.join();
+  boundary.setStyle({opacity: state.backend && !wholeFootprint && !isWorld(activeBounds()) ? 0.85 : 0});
   $("density-map").hidden = $("map-layer").value !== "density";
   if (state.history && $("map-layer").value === "overview") {
     renderOverview(points);
@@ -1077,7 +1092,9 @@ function render() {
   mapHelp();
   $("provenance").textContent = sourceLabel();
   $("coverage").textContent = state.backend
-    ? "Study bounds (west, south, east, north) " + bounds + ". Satellite observation coverage is unknown."
+    ? "Study bounds (west, south, east, north) " + bounds + ". " +
+      (state.backend.area_coverage === "partial" ? "Data cover the portion inside the solid archive outline. " : "") +
+      "Satellite observation coverage is unknown."
     : "";
   $("download-csv").disabled = !visible.length;
   $("download-csv").textContent = state.history && selectedSensors().some(sensor => state.offsets[sensor] != null)
